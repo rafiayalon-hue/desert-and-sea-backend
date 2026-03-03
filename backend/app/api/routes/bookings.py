@@ -34,8 +34,32 @@ async def sync_bookings(
 ):
     """Manually trigger a sync from MiniHotel."""
     raw = await minihotel_client.get_bookings(str(from_date), str(to_date))
-    return {"synced": len(raw)}
-
+    synced = 0
+    for item in raw:
+        existing = await db.scalar(
+            select(Booking).where(Booking.minihotel_id == str(item["id"]))
+        )
+        if existing:
+            existing.check_in = item.get("check_in", existing.check_in)
+            existing.check_out = item.get("check_out", existing.check_out)
+            existing.status = item.get("status", existing.status)
+            existing.total_price = item.get("total_price", existing.total_price)
+            existing.room_name = item.get("room_name", existing.room_name)
+        else:
+            new_booking = Booking(
+                minihotel_id=str(item["id"]),
+                guest_name=item.get("guest_name", ""),
+                guest_phone=item.get("guest_phone", ""),
+                room_name=item.get("room_name", ""),
+                check_in=item.get("check_in"),
+                check_out=item.get("check_out"),
+                total_price=item.get("total_price", 0),
+                status=item.get("status", "confirmed"),
+            )
+            db.add(new_booking)
+        synced += 1
+    await db.commit()
+    return {"synced": synced}
 
 @router.get("/stats/occupancy")
 async def occupancy_stats(month: str, db: AsyncSession = Depends(get_db)):
