@@ -1,14 +1,15 @@
-from datetime import date
-
+from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, extract
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.database import get_db
 from app.integrations.minihotel import minihotel_client
 from app.models import Booking
+import calendar
 
 router = APIRouter()
+
+ACTIVE_STATUSES = {"confirmed", "channel manager", "homepage"}
 
 
 @router.get("/")
@@ -61,52 +62,67 @@ async def sync_bookings(
     await db.commit()
     return {"synced": synced}
 
+
 @router.get("/stats/occupancy")
 async def occupancy_stats(month: str, db: AsyncSession = Depends(get_db)):
-    """Get occupancy stats for a month (YYYY-MM format), calculated locally."""
-    import calendar
-    
     year, mon = int(month.split("-")[0]), int(month.split("-")[1])
     days_in_month = calendar.monthrange(year, mon)[1]
-    
+    month_start = date(year, mon, 1)
+    month_end = date(year, mon, days_in_month)
+
     query = select(Booking).where(
-        extract("year", Booking.check_in) == year,
-        extract("month", Booking.check_in) == mon,
-        Booking.status == "confirmed"
+        and_(
+            Booking.check_in < month_end + timedelta(days=1),
+            Booking.check_out > month_start,
+        )
     )
     result = await db.scalars(query)
     bookings = result.all()
-    
+
     desert_nights = 0
     sea_nights = 0
-    
+
     for b in bookings:
-        nights = (b.check_out - b.check_in).days
-        room = (b.room_name or "").strip()
-        
-        if room == "des_sea":
+        status = (b.status or "").strip().lower()
+        if status not in ACTIVE_STATUSES:
+            continue
+
+        start = max(b.check_in, month_start)
+        end = min(b.check_out, month_end + timedelta(days=1))
+        nights = (end - start).days
+        if nights <= 0:
+            continue
+
+        room = (b.room_name or "").strip().lower().replace(" ", "")
+
+        if "des_sea" in room:
             desert_nights += nights
             sea_nights += nights
-        elif room == "sesert":
+        elif "sea" in room and "sesert" in room:
             desert_nights += nights
-        elif room == "sea":
             sea_nights += nights
-    
+        elif "sesert" in room:
+            desert_nights += nights
+        elif "sea" in room:
+            sea_nights += nights
+
     return {
         "month": month,
         "days_in_month": days_in_month,
         "desert": {
             "nights_booked": desert_nights,
-            "occupancy_pct": round(desert_nights / days_in_month * 100, 1)
+            "occupancy_pct": round(desert_nights / days_in_month * 100, 1),
         },
         "sea": {
             "nights_booked": sea_nights,
-            "occupancy_pct": round(sea_nights / days_in_month * 100, 1)
+            "occupancy_pct": round(sea_nights / days_in_month * 100, 1),
         },
         "combined": {
             "nights_booked": desert_nights + sea_nights,
-            "occupancy_pct": round((desert_nights + sea_nights) / (days_in_month * 2) * 100, 1)
-        }
+            "occupancy_pct": round(
+                (desert_nights + sea_nights) / (days_in_month * 2) * 100, 1
+            ),
+        },
     }
 
 
