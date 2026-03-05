@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic_settings import BaseSettings
 
 
@@ -8,9 +9,9 @@ class Settings(BaseSettings):
     minihotel_api_key: str
     minihotel_property_id: str
 
-    ttlock_client_id: str
-    ttlock_client_secret: str
-    ttlock_access_token: str
+    ttlock_client_id: Optional[str] = None
+    ttlock_client_secret: Optional[str] = None
+    ttlock_access_token: Optional[str] = None
 
     twilio_account_sid: str
     twilio_auth_token: str
