@@ -6,6 +6,4 @@ httpx
 pydantic-settings
 python-dotenv
 aiofiles
-aiosqlite
 twilio
-asyncpg
