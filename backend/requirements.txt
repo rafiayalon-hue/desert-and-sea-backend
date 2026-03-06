@@ -8,4 +8,4 @@ python-dotenv
 aiofiles
 aiosqlite
 twilio
-psycopg2-binary
+asyncpg
