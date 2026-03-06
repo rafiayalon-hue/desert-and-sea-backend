@@ -132,3 +132,78 @@ async def get_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
     if not booking:
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
     return booking
+@router.post("/upload-excel")
+async def upload_excel(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload historical bookings from MiniHotel Excel export."""
+    import io
+    from datetime import datetime
+    import openpyxl
+
+    contents = await file.read()
+    wb = openpyxl.load_workbook(io.BytesIO(contents))
+    ws = wb.active
+
+    inserted = 0
+    updated = 0
+    errors = 0
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        minihotel_id = str(row[0]) if row[0] else None
+        if not minihotel_id:
+            continue
+        try:
+            first_name = row[1] or ""
+            last_name = row[2] or ""
+            guest_name = f"{first_name} {last_name}".strip()
+            check_in = row[3].date() if isinstance(row[3], datetime) else row[3]
+            check_out = row[4].date() if isinstance(row[4], datetime) else row[4]
+            nights = row[5] or 0
+            source = row[7] or ""
+            email = row[10] or ""
+            status = row[13] or ""
+            total_price_str = str(row[15] or "0").replace("ILS ", "").replace(",", "").strip()
+            try:
+                total_price = float(total_price_str)
+            except Exception:
+                total_price = 0.0
+            notes = row[17] or ""
+            room_name = row[18] or ""
+
+            existing = await db.scalar(
+                select(Booking).where(Booking.minihotel_id == minihotel_id)
+            )
+            if existing:
+                existing.guest_name = guest_name
+                existing.check_in = check_in
+                existing.check_out = check_out
+                existing.status = status
+                existing.total_price = total_price
+                existing.room_name = room_name
+                existing.notes = notes
+                updated += 1
+            else:
+                new_booking = Booking(
+                    minihotel_id=minihotel_id,
+                    guest_name=guest_name,
+                    guest_phone="",
+                    guest_email=email,
+                    room_name=room_name,
+                    check_in=check_in,
+                    check_out=check_out,
+                    nights=nights,
+                    total_price=total_price,
+                    status=status,
+                    source=source,
+                    notes=notes,
+                )
+                db.add(new_booking)
+                inserted += 1
+        except Exception as e:
+            errors += 1
+            continue
+
+    await db.commit()
+    return {"inserted": inserted, "updated": updated, "errors": errors}
