@@ -6,7 +6,7 @@ import httpx
 
 from app.config import settings
 
-BASE_URL = "https://app.minihotel.app/api/v1"
+BASE_URL = "https://api2.minihotel.cloud/api/Agents/Sci"
 
 
 class MiniHotelClient:
