@@ -182,23 +182,18 @@ async def upload_excel(
                 existing.status = status
                 existing.total_price = total_price
                 existing.room_name = room_name
-                existing.notes = notes
-                updated += 1
+                              updated += 1
             else:
-                new_booking = Booking(
-                    minihotel_id=minihotel_id,
-                    guest_name=guest_name,
-                    guest_phone="",
-                    guest_email=email,
-                    room_name=room_name,
-                    check_in=check_in,
-                    check_out=check_out,
-                    nights=nights,
-                    total_price=total_price,
-                    status=status,
-                    source=source,
-                    notes=notes,
-                )
+              new_booking = Booking(
+    minihotel_id=minihotel_id,
+    guest_name=guest_name,
+    guest_phone="",
+    room_name=room_name,
+    check_in=check_in,
+    check_out=check_out,
+    total_price=total_price,
+    status=status,
+)
                 db.add(new_booking)
                 inserted += 1
         except Exception as e:
