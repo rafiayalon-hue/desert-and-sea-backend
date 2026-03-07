@@ -132,6 +132,8 @@ async def get_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
     if not booking:
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
     return booking
+
+
 @router.post("/upload-excel")
 async def upload_excel(
     file: UploadFile = File(...),
@@ -160,22 +162,18 @@ async def upload_excel(
             guest_name = f"{first_name} {last_name}".strip()
             check_in = row[3].date() if isinstance(row[3], datetime) else row[3]
             check_out = row[4].date() if isinstance(row[4], datetime) else row[4]
-            nights = row[5] or 0
-            source = row[7] or ""
-            email = row[10] or ""
             status = row[13] or ""
             total_price_str = str(row[15] or "0").replace("ILS ", "").replace(",", "").strip()
             try:
                 total_price = float(total_price_str)
             except Exception:
                 total_price = 0.0
-            notes = row[17] or ""
             room_name = row[18] or ""
 
             existing = await db.scalar(
                 select(Booking).where(Booking.minihotel_id == minihotel_id)
             )
-         if existing:
+            if existing:
                 existing.guest_name = guest_name
                 existing.check_in = check_in
                 existing.check_out = check_out
