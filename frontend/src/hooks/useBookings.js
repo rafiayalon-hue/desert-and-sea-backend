@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react";
 
-const USE_MOCK = true;
-const API_BASE = "http://localhost:8000/api";
-
+const USE_MOCK = false;
+const API_BASE = import.meta.env.VITE_API_URL 
+  ? `${import.meta.env.VITE_API_URL}/api` 
+  : "https://selfless-happiness-production.up.railway.app/api";
 function enrichBooking(b) {
   return {
     ...b,
