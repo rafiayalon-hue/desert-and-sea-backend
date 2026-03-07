@@ -13,6 +13,7 @@ app.add_middleware(
         "http://localhost:5173",
         "https://desert-and-sea.vercel.app",
         "https://*.vercel.app",
+       "https://desert-and-sea-production.up.railway.app", 
     ],
     allow_credentials=True,
     allow_methods=["*"],
