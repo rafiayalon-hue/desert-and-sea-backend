@@ -23,8 +23,12 @@ export default function ImportExcel() {
         method: "POST",
         body: formData,
       });
-      const data = await res.json();
-      setResult(data);
+     const data = await res.json();
+if (!res.ok) {
+  setError(`שגיאה ${res.status}: ${JSON.stringify(data)}`);
+} else {
+  setResult(data);
+}
     } catch (err) {
       setError("שגיאה בהעלאה");
     } finally {
