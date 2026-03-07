@@ -175,25 +175,25 @@ async def upload_excel(
             existing = await db.scalar(
                 select(Booking).where(Booking.minihotel_id == minihotel_id)
             )
-            if existing:
+         if existing:
                 existing.guest_name = guest_name
                 existing.check_in = check_in
                 existing.check_out = check_out
                 existing.status = status
                 existing.total_price = total_price
                 existing.room_name = room_name
-                              updated += 1
+                updated += 1
             else:
-              new_booking = Booking(
-    minihotel_id=minihotel_id,
-    guest_name=guest_name,
-    guest_phone="",
-    room_name=room_name,
-    check_in=check_in,
-    check_out=check_out,
-    total_price=total_price,
-    status=status,
-)
+                new_booking = Booking(
+                    minihotel_id=minihotel_id,
+                    guest_name=guest_name,
+                    guest_phone="",
+                    room_name=room_name,
+                    check_in=check_in,
+                    check_out=check_out,
+                    total_price=total_price,
+                    status=status,
+                )
                 db.add(new_booking)
                 inserted += 1
         except Exception as e:
