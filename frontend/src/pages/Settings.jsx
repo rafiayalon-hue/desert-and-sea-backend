@@ -1,3 +1,4 @@
+import ImportExcel from "../components/ImportExcel";
 import { useState } from "react";
 import { WHATSAPP_MESSAGES } from "../data/whatsappMessages";
 
@@ -170,7 +171,13 @@ export default function Settings() {
           <span className="detail-value" style={{ color: "var(--text-muted)" }}>לא מוגדר</span>
         </div>
       </Section>
-
+<Section title="📥 ייבוא נתונים">
+          <div style={{ fontSize: ".8rem", color: "var(--text-muted)", marginBottom: 12 }}>
+            ייבוא הזמנות היסטוריות מקובץ Excel של MiniHotel
+          </div>
+          <ImportExcel />
+        </Section>
+     
       <button className="btn btn-primary" onClick={save}>
         {saved ? "✅ נשמר!" : "שמור הגדרות"}
       </button>
