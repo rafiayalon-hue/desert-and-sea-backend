@@ -157,7 +157,7 @@ export default function Settings() {
         </div>
         <div className="detail-row">
           <span className="detail-label">מצב</span>
-          <span className="detail-value" style={{ color: "var(--warning)" }}>🟡 Mock Data — ממתין ליובל</span>
+          <span className="detail-value" style={{ color: "var(--success)" }}>🟢 מחובר — Production</span>
         </div>
       </Section>
 
