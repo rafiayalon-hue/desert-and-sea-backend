@@ -1,16 +1,48 @@
 import { useState, useEffect } from "react";
 
+const API_BASE = import.meta.env.VITE_API_URL
+  ? `${import.meta.env.VITE_API_URL}/api`
+  : "https://selfless-happiness-production.up.railway.app/api";
+
 let cache = null;
+
 async function loadBookings() {
   if (cache) return cache;
-  const res = await fetch("/mock_data/mock_bookings.json");
-  cache = await res.json();
+  const res = await fetch(`${API_BASE}/bookings/`);
+  const json = await res.json();
+  cache = Array.isArray(json) ? json : (json.bookings || []);
   return cache;
+}
+
+function enrichBooking(b) {
+  const checkin  = b.check_in  || b.checkin  || "";
+  const checkout = b.check_out || b.checkout || "";
+  const nights = checkin && checkout
+    ? Math.round((new Date(checkout) - new Date(checkin)) / (1000 * 60 * 60 * 24))
+    : 0;
+  const room_name = (b.room_name || "").toLowerCase().replace(" ", "");
+  let rooms = [];
+  if (room_name.includes("des_sea") || (room_name.includes("sesert") && room_name.includes("sea"))) rooms = ["desert", "sea"];
+  else if (room_name.includes("sesert")) rooms = ["desert"];
+  else if (room_name.includes("sea"))    rooms = ["sea"];
+
+  return {
+    ...b,
+    checkin,
+    checkout,
+    nights,
+    rooms,
+    full_name:   b.guest_name || "",
+    phone:       b.guest_phone || "",
+    email:       b.guest_email || "",
+    country:     b.country || "",
+    total_price: b.total_price || 0,
+    source:      b.source || "direct",
+  };
 }
 
 function extractBaseName(fullName) {
   if (!fullName) return "";
-  // הסר סיומות כמו " - אמא", " חברות", " (תיכון)" וכו'
   return fullName
     .replace(/\s*[-–]\s*.+$/, "")
     .replace(/\s*\(.+\)$/, "")
@@ -18,23 +50,30 @@ function extractBaseName(fullName) {
     .trim();
 }
 
+function normalizeStatus(status) {
+  if (!status) return "cancelled";
+  const s = status.toLowerCase();
+  if (s === "confirmed" || s === "channel manager" || s === "homepage") return "confirmed";
+  return "cancelled";
+}
+
 export function useGuests() {
   const [guests, setGuests]   = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadBookings().then(bookings => {
-      // בנה מפה: key → אורח
-      const phoneMap = {};  // טלפון → guestKey
-      const guestMap = {};  // guestKey → אורח
+    loadBookings().then(raw => {
+      const bookings = raw.map(enrichBooking);
+
+      const phoneMap = {};
+      const guestMap = {};
 
       for (const b of bookings) {
-        if (b.status === "cancelled") continue;
+        if (normalizeStatus(b.status) === "cancelled") continue;
 
         const baseName = extractBaseName(b.full_name);
         const phone    = b.phone || "";
 
-        // קבע key: קודם לפי טלפון, אחר כך לפי שם בסיסי
         let key = null;
         if (phone && phoneMap[phone]) {
           key = phoneMap[phone];
@@ -51,11 +90,11 @@ export function useGuests() {
             key,
             display_name: baseName || b.full_name,
             phone,
-            email:   b.email || "",
-            country: b.country || "",
+            email:    b.email || "",
+            country:  b.country || "",
             bookings: [],
-            notes: "",
-            aliases: new Set(),
+            notes:    "",
+            aliases:  new Set(),
           };
         }
 
@@ -76,21 +115,19 @@ export function useGuests() {
         });
       }
 
-      // חשב סטטיסטיקות וסדר
       const result = Object.values(guestMap).map(g => {
-        g.aliases = [...g.aliases];
+        g.aliases      = [...g.aliases];
         g.visits       = g.bookings.length;
         g.total_nights = g.bookings.reduce((s, b) => s + (b.nights || 0), 0);
-        g.total_spent  = g.bookings.reduce((s, b) => s + (b.price || 0), 0);
+        g.total_spent  = g.bookings.reduce((s, b) => s + (b.price  || 0), 0);
         g.last_visit   = g.bookings.map(b => b.checkin).sort().reverse()[0] || "";
         g.is_returning = g.visits > 1;
-        // חשוד כפול: אותו שם בסיסי מופיע פעמים בלי טלפון
         g.suspect_duplicate = g.aliases.length > 2 && !g.phone;
-        g.bookings.sort((a, b) => b.checkin.localeCompare(a.checkin));
+        g.bookings.sort((a, b) => (b.checkin || "").localeCompare(a.checkin || ""));
         return g;
       });
 
-      result.sort((a, b) => b.last_visit.localeCompare(a.last_visit));
+      result.sort((a, b) => (b.last_visit || "").localeCompare(a.last_visit || ""));
       setGuests(result);
       setLoading(false);
     });
@@ -98,3 +135,4 @@ export function useGuests() {
 
   return { guests, loading };
 }
+
