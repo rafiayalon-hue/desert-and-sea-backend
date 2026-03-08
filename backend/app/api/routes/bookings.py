@@ -201,7 +201,7 @@ async def upload_excel(
             existing = await db.scalar(
                 select(Booking).where(Booking.minihotel_id == minihotel_id)
             )
-           if existing:
+            if existing:
                 existing.guest_name  = guest_name
                 existing.guest_email = guest_email
                 if not existing.guest_phone:
