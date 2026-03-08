@@ -163,7 +163,9 @@ export function useOccupancyStats() {
       if (ci.slice(0,7) !== mStr && co.slice(0,7) !== mStr) continue;
 
       const rooms = b.rooms || [];
-      const nights = b.nights || 0;
+      const nights = b.checkin && b.checkout
+  ? Math.round((new Date(b.checkout) - new Date(b.checkin)) / (1000 * 60 * 60 * 24))
+  : 0;
 
       if (rooms.includes("desert") && rooms.includes("sea")) { desertN += nights; seaN += nights; }
       else if (rooms.includes("desert")) desertN += nights;
