@@ -109,7 +109,7 @@ export default function BookingsList({ navigate }) {
               onClick={() => navigate("booking", b.id)}
             >
               <div style={{ fontFamily: "monospace", fontSize: ".78rem", color: "var(--text-muted)" }}>
-                {b.id?.slice(-4)}
+                {String(b.id || "").slice(-4)}
               </div>
               <div>
                 <div style={{ fontWeight: 600 }}>{b.full_name}</div>
