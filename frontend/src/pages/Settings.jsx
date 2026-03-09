@@ -116,8 +116,8 @@ function Section({ title, children }) {
 }
 
 export default function Settings() {
-  const [checkinTime,  setCheckinTime]  = useState("15:00");
-  const [checkoutTime, setCheckoutTime] = useState("11:00");
+  const [checkinTime,  setCheckinTime]  = useState("14:00");
+  const [checkoutTime, setCheckoutTime] = useState("12:00");
   const [saved,        setSaved]        = useState(false);
 
   const save = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
