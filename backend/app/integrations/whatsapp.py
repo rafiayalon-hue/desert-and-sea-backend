@@ -31,8 +31,9 @@ MESSAGE_TEMPLATES = {
 
 def send_whatsapp(to_phone: str, body: str) -> str:
     """Send a WhatsApp message. Returns the Twilio message SID."""
+    client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
     to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
-    message = _client.messages.create(
+    message = client.messages.create(
         from_=settings.twilio_whatsapp_from,
         to=to,
         body=body,
