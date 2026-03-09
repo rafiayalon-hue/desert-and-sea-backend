@@ -244,13 +244,17 @@ async def upload_excel(
     return {"inserted": inserted, "updated": updated, "errors": errors}
 
 
+# ── החלף את החלק התחתון של bookings.py (מ-"from pydantic import BaseModel" עד הסוף) ──
+
 from pydantic import BaseModel
 from typing import Optional
+
 
 class BookingUpdate(BaseModel):
     notes: Optional[str] = None
     payment_method: Optional[str] = None
     payment_link: Optional[str] = None
+    guest_phone: Optional[str] = None   # NEW — מילוי ידני מפעיל WhatsApp
 
 
 @router.patch("/{booking_id}")
@@ -259,14 +263,35 @@ async def update_booking(
     data: BookingUpdate,
     db: AsyncSession = Depends(get_db),
 ):
+    from app.scheduler import schedule_booking_messages
+
     booking = await db.get(Booking, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
+
+    had_phone = bool(booking.guest_phone)
+
     if data.notes is not None:
         booking.notes = data.notes
     if data.payment_method is not None:
         booking.payment_method = data.payment_method
     if data.payment_link is not None:
         booking.payment_link = data.payment_link
+    if data.guest_phone is not None:
+        booking.guest_phone = data.guest_phone
+
     await db.commit()
-    return booking
+    await db.refresh(booking)
+
+    # ── הפעל תזמון WhatsApp אם נוסף טלפון לראשונה ──
+    phone_just_added = (not had_phone) and bool(booking.guest_phone)
+    if phone_just_added:
+        # אישור מיידי + תזמון שאר ההודעות
+        from app.scheduler import trigger_confirmation
+        await trigger_confirmation(booking, db)
+        schedule_booking_messages(booking)
+
+    return {
+        **booking.__dict__,
+        "automation_triggered": phone_just_added,
+    }
