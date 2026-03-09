@@ -244,8 +244,6 @@ async def upload_excel(
     return {"inserted": inserted, "updated": updated, "errors": errors}
 
 
-# ── החלף את החלק התחתון של bookings.py (מ-"from pydantic import BaseModel" עד הסוף) ──
-
 from pydantic import BaseModel
 from typing import Optional
 
