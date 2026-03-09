@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     minihotel_api_key: str
     minihotel_property_id: str
+    MH_USER: str
+    MH_PASS: str  
+    MINIHOTEL_HOTEL_ID: str
+    
     ttlock_client_id: Optional[str] = None
     ttlock_client_secret: Optional[str] = None
     ttlock_access_token: Optional[str] = None
