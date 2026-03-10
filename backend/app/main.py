@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_link VARCHAR(500)"))
         # new column for custom checkout time
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS checkout_time VARCHAR(10)"))
+        await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_returning_guest BOOLEAN DEFAULT FALSE"))
 
         # message_log table (idempotent)
         await conn.execute(text("""
