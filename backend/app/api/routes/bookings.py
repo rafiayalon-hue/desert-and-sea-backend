@@ -252,7 +252,9 @@ class BookingUpdate(BaseModel):
     notes: Optional[str] = None
     payment_method: Optional[str] = None
     payment_link: Optional[str] = None
-    guest_phone: Optional[str] = None   # NEW — מילוי ידני מפעיל WhatsApp
+    guest_phone: Optional[str] = None
+    checkin_time: Optional[str] = None
+    checkout_time: Optional[str] = None
 
 
 @router.patch("/{booking_id}")
@@ -261,7 +263,7 @@ async def update_booking(
     data: BookingUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    from app.scheduler import schedule_booking_messages
+    from app.scheduler import schedule_booking_messages, trigger_confirmation
 
     booking = await db.get(Booking, booking_id)
     if not booking:
@@ -275,8 +277,54 @@ async def update_booking(
         booking.payment_method = data.payment_method
     if data.payment_link is not None:
         booking.payment_link = data.payment_link
+    if data.checkin_time is not None:
+        booking.checkin_time = data.checkin_time
+    if data.checkout_time is not None:
+        booking.checkout_time = data.checkout_time
+
+    is_returning = False
+
     if data.guest_phone is not None:
-        booking.guest_phone = data.guest_phone
+        new_phone = data.guest_phone.strip()
+        booking.guest_phone = new_phone
+
+        # ── זיהוי אורח חוזר לפי טלפון ──────────────────────────────
+        if new_phone:
+            from sqlalchemy import select as sa_select
+
+            def _norm(p: str) -> str:
+                p = p.strip().replace("-", "").replace(" ", "")
+                if p.startswith("+972"):
+                    p = "0" + p[4:]
+                elif p.startswith("972"):
+                    p = "0" + p[3:]
+                return p
+
+            norm_new = _norm(new_phone)
+
+            existing = await db.scalars(
+                sa_select(Booking).where(
+                    Booking.id != booking_id,
+                    Booking.guest_phone != "",
+                    Booking.guest_phone.isnot(None),
+                )
+            )
+            other_bookings = existing.all()
+
+            matches = [b for b in other_bookings if _norm(b.guest_phone or "") == norm_new]
+            active_matches = [
+                b for b in matches
+                if (b.status or "").lower() not in ("cancelled", "cancel")
+            ]
+
+            if active_matches:
+                is_returning = True
+                names = {b.guest_name for b in active_matches}
+                if len(names) > 1:
+                    import logging
+                    logging.warning(
+                        f"[GUEST_LOOKUP] Phone {new_phone} found under multiple names: {names}"
+                    )
 
     await db.commit()
     await db.refresh(booking)
@@ -284,12 +332,11 @@ async def update_booking(
     # ── הפעל תזמון WhatsApp אם נוסף טלפון לראשונה ──
     phone_just_added = (not had_phone) and bool(booking.guest_phone)
     if phone_just_added:
-        # אישור מיידי + תזמון שאר ההודעות
-        from app.scheduler import trigger_confirmation
         await trigger_confirmation(booking, db)
         schedule_booking_messages(booking)
 
     return {
         **booking.__dict__,
         "automation_triggered": phone_just_added,
+        "is_returning_guest": is_returning,
     }
