@@ -255,6 +255,7 @@ class BookingUpdate(BaseModel):
     guest_phone: Optional[str] = None
     checkin_time: Optional[str] = None
     checkout_time: Optional[str] = None
+    guest_name: Optional[str] = None
 
 
 @router.patch("/{booking_id}")
@@ -281,6 +282,9 @@ async def update_booking(
         booking.checkin_time = data.checkin_time
     if data.checkout_time is not None:
         booking.checkout_time = data.checkout_time
+    if data.guest_name is not None:
+    booking.guest_name = data.guest_name.strip()
+  
 
     is_returning = False
 
