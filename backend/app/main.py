@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.api.routes import bookings, guests, locks, messages, settings
+from app.api.routes import guests_merge
 from app.api.routes import webhook          # NEW
 from app.database import engine, Base
 from app.scheduler import scheduler         # NEW
@@ -82,6 +83,7 @@ app.include_router(locks.router,    prefix="/api/locks",     tags=["locks"])
 app.include_router(messages.router, prefix="/api/messages",  tags=["messages"])
 app.include_router(settings.router, prefix="/api/settings",  tags=["settings"])
 app.include_router(webhook.router,  prefix="/api/webhook",   tags=["webhook"])  # NEW
+app.include_router(guests_merge.router, prefix="/api/guests", tags=["guests"])
 
 
 @app.get("/api/health")
