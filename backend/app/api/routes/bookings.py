@@ -283,7 +283,7 @@ async def update_booking(
     if data.checkout_time is not None:
         booking.checkout_time = data.checkout_time
     if data.guest_name is not None:
-    booking.guest_name = data.guest_name.strip()
+        booking.guest_name = data.guest_name.strip()
   
 
     is_returning = False
