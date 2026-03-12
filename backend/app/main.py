@@ -67,7 +67,7 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
-static_dir = os.path.join(os.path.dirname(__file__), "app")
+static_dir = os.path.dirname(__file__)
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 app.add_middleware(
