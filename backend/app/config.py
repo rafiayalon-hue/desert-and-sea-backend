@@ -19,9 +19,10 @@ class Settings(BaseSettings):
     MH_PASS: str  
     MINIHOTEL_HOTEL_ID: str
     
-    ttlock_client_id: Optional[str] = None
-    ttlock_client_secret: Optional[str] = None
-    ttlock_access_token: Optional[str] = None
+    TTLOCK_CLIENT_ID:     str = "d9293b3d0ec247dcabe3b3dc1599e0a8"
+    TTLOCK_CLIENT_SECRET: str = ""
+    TTLOCK_USERNAME:      str = "rafiayalon@gmail.com"
+    TTLOCK_PASSWORD:      str = ""
     twilio_account_sid: str
     twilio_auth_token: str
     twilio_whatsapp_from: str = "whatsapp:+14155238886"
