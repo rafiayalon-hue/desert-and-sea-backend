@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from fastapi.staticfiles import StaticFiles
+import os
 
 from app.api.routes import bookings, guests, locks, messages, settings
 from app.api.routes import guests_merge
@@ -65,6 +67,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+static_dir = os.path.join(os.path.dirname(__file__), "app")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
 app.add_middleware(
     CORSMiddleware,
