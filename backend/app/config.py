@@ -3,20 +3,21 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # ── Core ────────────────────────────────────────────────
-    database_url: str
+    database_url: str = ""
     secret_key: str = "desert-and-sea-secret"
     debug: bool = False
     redis_url: str = "redis://localhost:6379/0"
 
-    # ── MiniHotel ───────────────────────────────────────────
+    # ── MiniHotel (names the existing code reads — UPPERCASE) ──
+    MH_USER: str = "desertsea"
+    MH_PASS: str = "desert@@003"
+    MINIHOTEL_HOTEL_ID: str = "desert89"
+    # lowercase / extra MiniHotel fields (optional, tolerated)
     minihotel_api_key: str = ""
     minihotel_property_id: str = ""
-    minihotel_hotel_id: str = ""
     minihotel_username: str = ""
     minihotel_password: str = ""
     minihotel_use_sandbox: bool = False
-    mh_user: str = ""
-    mh_pass: str = ""
     mh_base: str = "https://api2.minihotel.cloud"
 
     # ── TTLock ──────────────────────────────────────────────
