@@ -13,7 +13,10 @@ Passcode model (gateway / remote):
   addType=2  — program remotely via the gateway (no Bluetooth proximity)
 """
 import hashlib
+import random
 import time
+from datetime import datetime
+
 import httpx
 
 from app.config import settings
@@ -26,6 +29,12 @@ BASE_URL = "https://euapi.ttlock.com/v3"
 PASSCODE_TYPE_PERIOD = 3
 # addType: 1=via Bluetooth, 2=via gateway (remote)
 ADD_TYPE_GATEWAY = 2
+
+# מיפוי חדר → lock_id (מאומת מול אפליקציית TTLock)
+LOCK_IDS = {
+    "desert": 18201474,  # צימר מדבר
+    "sea": 18201274,     # צימר ים
+}
 
 
 def _md5(text: str) -> str:
@@ -199,3 +208,98 @@ class TTLockClient:
 
 
 ttlock_client = TTLockClient()
+
+
+# ── Module-level helpers expected by app.api.routes.locks ───────────────
+
+def _resolve_lock_id(room_name: str) -> int:
+    """
+    ממפה את שם החדר (כפי שמגיע מ-MiniHotel, למשל 'צימר מדבר' / 'צימר ים')
+    ל-lock_id הנכון. בודק לפי הימצאות המילה 'מדבר' או 'ים' בתוך השם,
+    כדי לא להיות תלוי בניסוח מדויק (רישיות/רווחים/עברית-אנגלית).
+    """
+    name = room_name or ""
+    lowered = name.lower()
+    if "מדבר" in name or "desert" in lowered:
+        return LOCK_IDS["desert"]
+    if "ים" in name or "sea" in lowered:
+        return LOCK_IDS["sea"]
+    raise ValueError(f"לא ניתן לזהות חדר (desert/sea) מתוך room_name: {room_name!r}")
+
+
+async def get_lock_status(lock_id: int) -> dict:
+    """
+    סטטוס מנעול בודד — סוללה, חיבור וכו'.
+    ה-API של TTLock לא חושף endpoint לפרטי מנעול בודד, אז אנחנו
+    מסננים מתוך lock/list (שמחזיר את כל המנעולים בחשבון).
+    """
+    locks = await ttlock_client.list_locks()
+    for lock in locks:
+        if lock.get("lockId") == lock_id:
+            return lock
+    raise TTLockError(-1, f"lockId {lock_id} לא נמצא ב-list_locks()")
+
+
+async def list_passcodes(lock_id: int) -> list[dict]:
+    """עטיפה ברמת מודול (locks.py מייבא פונקציה, לא מתודת מחלקה)."""
+    return await ttlock_client.list_passcodes(lock_id)
+
+
+async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -> str:
+    """
+    יוצר קוד כניסה להזמנה במנעול הנכון (לפי booking.room_name),
+    שומר אותו ב-booking.entry_code, ומחזיר את הקוד.
+
+    אם passcode לא סופק — נוצר קוד רנדומלי בן 6 ספרות.
+    חלון התוקף: 14:00 ביום ה-check_in עד 11:00 ביום ה-check_out.
+    שם הקוד במנעול נשמר כ-'BK{booking.id}' כדי שנוכל לאתר ולמחוק אותו
+    בבירור (booking.entry_code בלבד לא מספיק כי אין עמודת keyboard_pwd_id).
+    """
+    lock_id = _resolve_lock_id(booking.room_name)
+
+    if not passcode:
+        passcode = str(random.randint(100000, 999999))
+
+    start_dt = datetime.combine(booking.check_in, datetime.min.time()).replace(hour=14)
+    end_dt = datetime.combine(booking.check_out, datetime.min.time()).replace(hour=11)
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+
+    passcode_name = f"BK{booking.id}"
+
+    await ttlock_client.add_passcode(
+        lock_id=lock_id,
+        passcode=passcode,
+        passcode_name=passcode_name,
+        start_date=start_ms,
+        end_date=end_ms,
+    )
+
+    booking.entry_code = passcode
+    db.add(booking)
+    await db.commit()
+
+    return passcode
+
+
+async def remove_passcode_after_checkout(booking, db) -> bool:
+    """
+    מוחק את קוד הכניסה של ההזמנה מהמנעול (מאותר לפי השם 'BK{booking.id}'
+    שנשמר בזמן היצירה), ומנקה את booking.entry_code.
+    מחזיר True אם נמצא ונמחק קוד בפועל, False אם לא היה קוד להזמנה הזו.
+    """
+    lock_id = _resolve_lock_id(booking.room_name)
+    passcode_name = f"BK{booking.id}"
+
+    passcodes = await ttlock_client.list_passcodes(lock_id)
+    target = next((p for p in passcodes if p.get("keyboardPwdName") == passcode_name), None)
+
+    booking.entry_code = None
+    db.add(booking)
+    await db.commit()
+
+    if not target:
+        return False
+
+    await ttlock_client.delete_passcode(lock_id, target["keyboardPwdId"])
+    return True
