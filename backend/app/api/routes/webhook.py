@@ -162,14 +162,24 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
 
     # New confirmed booking with a phone number → send confirmation now,
     # schedule the rest of the automated messages.
+    #
+    # IMPORTANT: this must never raise. The booking is already committed
+    # above — a downstream failure here (e.g. Twilio rejecting a bad
+    # number) must not turn into a 500, or MiniHotel will retry the same
+    # event up to 6 times over 6 hours (per their retry policy) for a
+    # problem that re-sending the webhook can't fix.
     should_notify = (
         is_brand_new
         and booking.guest_phone
         and mh_status != "CL"
     )
+    notify_error = None
     if should_notify:
-        await trigger_confirmation(booking, db)
-        schedule_booking_messages(booking)
+        try:
+            await trigger_confirmation(booking, db)
+            schedule_booking_messages(booking)
+        except Exception as exc:  # noqa: BLE001 — deliberately broad, see comment above
+            notify_error = str(exc)
 
     return {
         "status": "ok",
@@ -180,7 +190,8 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         "guest_name": booking.guest_name,
         "room": booking.room_name,
         "booking_status": booking.status,
-        "messages_scheduled": should_notify,
+        "messages_scheduled": should_notify and notify_error is None,
+        "notify_error": notify_error,
         # visible for calibrating _normalise_room against real MiniHotel data
         "raw_room": {"roomNumber": first_room.get("roomNumber"), "roomType": first_room.get("roomType")},
     }
