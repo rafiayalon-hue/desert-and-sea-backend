@@ -141,6 +141,24 @@ async def get_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
     return booking
 
 
+@router.delete("/{booking_id}")
+async def delete_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
+    """מחיקת הזמנה - למשל להסרת הזמנות בדיקה. פעולה בלתי הפיכה."""
+    booking = await db.get(Booking, booking_id)
+    if not booking:
+        raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
+    minihotel_id = booking.minihotel_id
+    guest_name = booking.guest_name
+    await db.delete(booking)
+    await db.commit()
+    return {
+        "status": "deleted",
+        "booking_id": booking_id,
+        "minihotel_id": minihotel_id,
+        "guest_name": guest_name,
+    }
+
+
 def parse_price(val) -> float:
     try:
         return float(str(val or "0").replace("ILS ", "").replace(",", "").strip())
