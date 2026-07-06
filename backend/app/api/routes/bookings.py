@@ -1,6 +1,6 @@
 from datetime import date, timedelta
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.integrations.minihotel import minihotel_client
@@ -143,12 +143,15 @@ async def get_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.delete("/{booking_id}")
 async def delete_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
-    """מחיקת הזמנה - למשל להסרת הזמנות בדיקה. פעולה בלתי הפיכה."""
+    """מחיקת הזמנה - למשל להסרת הזמנות בדיקה. פעולה בלתי הפיכה.
+    מוחקת קודם רשומות message_log תלויות (foreign key), אחר כך את ההזמנה.
+    """
     booking = await db.get(Booking, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
     minihotel_id = booking.minihotel_id
     guest_name = booking.guest_name
+    await db.execute(text("DELETE FROM message_log WHERE booking_id = :bid"), {"bid": booking_id})
     await db.delete(booking)
     await db.commit()
     return {
