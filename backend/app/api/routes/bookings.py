@@ -151,7 +151,7 @@ async def delete_booking(booking_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
     minihotel_id = booking.minihotel_id
     guest_name = booking.guest_name
-    await db.execute(text("DELETE FROM message_log WHERE booking_id = :bid"), {"bid": booking_id})
+    await db.execute(text("DELETE FROM message_logs WHERE booking_id = :bid"), {"bid": booking_id})
     await db.delete(booking)
     await db.commit()
     return {
