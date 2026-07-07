@@ -161,6 +161,9 @@ export default function BookingDetail({ bookingId, navigate }) {
   const [creatingCode,    setCreatingCode]    = useState(false);
   const [codeError,       setCodeError]       = useState(null);
 
+  // מחיקת הזמנה
+  const [deleting, setDeleting] = useState(false);
+
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>טוען...</div>;
   if (!booking) return (
     <div style={{ padding: 40, textAlign: "center" }}>
@@ -175,7 +178,7 @@ export default function BookingDetail({ bookingId, navigate }) {
   const curPayLink    = paymentLink   !== null ? paymentLink   : (booking.payment_link   || "");
   const phone         = localPhone    !== null ? localPhone    : (booking.guest_phone    || "");
   const checkinTime   = localCheckinTime  !== null ? localCheckinTime  : (booking.checkin_time  || "14:00");
-  const checkoutTime  = localCheckoutTime !== null ? localCheckoutTime : (booking.checkout_time || "12:00");
+  const checkoutTime  = localCheckoutTime !== null ? localCheckoutTime : (booking.checkout_time || "14:00");
   // קוד פעיל: אם לחצו "צור קוד חדש" מציגים את הטופס גם אם יש כבר קוד קיים
   const ttlockCode    = showCodeForm ? null : (localTtlockCode !== null ? localTtlockCode : (booking.entry_code || null));
 
@@ -285,6 +288,26 @@ export default function BookingDetail({ bookingId, navigate }) {
     else alert("שמירה נכשלה");
   };
 
+  const deleteBooking = async () => {
+    const confirmed = window.confirm(
+      `למחוק לצמיתות את ההזמנה של ${displayName} (#${booking.minihotel_id || booking.id})?\n\nפעולה זו בלתי הפיכה.`
+    );
+    if (!confirmed) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`${API_BASE}/bookings/${booking.id}`, { method: "DELETE" });
+      if (res.ok) {
+        navigate("bookings");
+      } else {
+        alert("מחיקה נכשלה");
+        setDeleting(false);
+      }
+    } catch {
+      alert("שגיאת רשת");
+      setDeleting(false);
+    }
+  };
+
   return (
     <div>
       <div className="page-header">
@@ -298,6 +321,10 @@ export default function BookingDetail({ bookingId, navigate }) {
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span className={`room-tag ${booking.room_color}`} style={{ fontSize: ".85rem" }}>{booking.room_display}</span>
           <span className={`status-badge ${booking.status}`}>{booking.status_label}</span>
+          <button className="btn btn-secondary btn-sm" style={{ color: "#c0392b", borderColor: "#c0392b" }}
+            onClick={deleteBooking} disabled={deleting}>
+            {deleting ? "מוחק..." : "🗑️ מחק הזמנה"}
+          </button>
         </div>
       </div>
 
