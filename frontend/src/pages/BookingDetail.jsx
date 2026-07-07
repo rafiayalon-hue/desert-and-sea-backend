@@ -175,7 +175,7 @@ export default function BookingDetail({ bookingId, navigate }) {
   const curPayLink    = paymentLink   !== null ? paymentLink   : (booking.payment_link   || "");
   const phone         = localPhone    !== null ? localPhone    : (booking.guest_phone    || "");
   const checkinTime   = localCheckinTime  !== null ? localCheckinTime  : (booking.checkin_time  || "14:00");
-  const checkoutTime  = localCheckoutTime !== null ? localCheckoutTime : (booking.checkout_time || "14:00");
+  const checkoutTime  = localCheckoutTime !== null ? localCheckoutTime : (booking.checkout_time || "12:00");
   // קוד פעיל: אם לחצו "צור קוד חדש" מציגים את הטופס גם אם יש כבר קוד קיים
   const ttlockCode    = showCodeForm ? null : (localTtlockCode !== null ? localTtlockCode : (booking.entry_code || null));
 
