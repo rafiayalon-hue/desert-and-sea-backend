@@ -257,7 +257,7 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
         ומזכה גם לאורח לזכור קל יותר).
       - אם אין מספר טלפון עם לפחות 4 ספרות — נוצר קוד רנדומלי בן 4 ספרות.
 
-    חלון התוקף: 14:00 ביום ה-check_in עד 11:00 ביום ה-check_out.
+    חלון התוקף: 14:00 ביום ה-check_in עד 12:00 ביום ה-check_out.
     שם הקוד במנעול נשמר כ-'BK{booking.id}' כדי שנוכל לאתר ולמחוק אותו
     בבירור (booking.entry_code בלבד לא מספיק כי אין עמודת keyboard_pwd_id).
     """
@@ -271,7 +271,7 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
             passcode = str(random.randint(1000, 9999))
 
     start_dt = datetime.combine(booking.check_in, datetime.min.time()).replace(hour=14)
-    end_dt = datetime.combine(booking.check_out, datetime.min.time()).replace(hour=11)
+    end_dt = datetime.combine(booking.check_out, datetime.min.time()).replace(hour=12)
     start_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000)
 
