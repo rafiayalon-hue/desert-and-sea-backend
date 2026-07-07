@@ -45,8 +45,8 @@ function enrichBooking(b) {
       : rooms.includes("desert") ? "desert" : "sea",
     checkin_label:  formatDate(checkin),
     checkout_label: formatDate(checkout),
-    checkin_time:   b.checkin_time  || "15:00",
-    checkout_time:  b.checkout_time || "11:00",
+    checkin_time:   b.checkin_time  || "14:00",
+    checkout_time:  b.checkout_time || "12:00",
     source_label: b.source
       ? ({ direct: "ישיר", website: "אתר", airbnb: "Airbnb" }[b.source.toLowerCase()] || b.source)
       : "ישיר",
