@@ -218,10 +218,14 @@ def _resolve_lock_id(room_name: str) -> int:
     ממפה את שם החדר (כפי שמגיע מ-MiniHotel, למשל 'צימר מדבר' / 'צימר ים')
     ל-lock_id הנכון. בודק לפי הימצאות המילה 'מדבר' או 'ים' בתוך השם,
     כדי לא להיות תלוי בניסוח מדויק (רישיות/רווחים/עברית-אנגלית).
+
+    כולל גם תמיכה ב-'sesert' — שגיאת כתיב היסטורית (צריך 'desert') שקיימת
+    בחלק מהנתונים הישנים (יבוא Excel / webhook גרסה קודמת). ה-frontend
+    (useBookings.js) כבר מזהה את הכינוי הזה — כאן מיושר לאותה התנהגות.
     """
     name = room_name or ""
     lowered = name.lower()
-    if "מדבר" in name or "desert" in lowered:
+    if "מדבר" in name or "desert" in lowered or "sesert" in lowered:
         return LOCK_IDS["desert"]
     if "ים" in name or "sea" in lowered:
         return LOCK_IDS["sea"]
