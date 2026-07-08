@@ -3,13 +3,20 @@ APScheduler — WhatsApp message scheduler.
 Runs inside FastAPI process (no Redis/Celery needed).
 
 Schedule:
-  1. Confirmation   — triggered immediately on new booking (if phone exists)
-  2. Pre-arrival    — 48h before check_in at 10:00  ← מדולג אם פחות מ-48h
-  3. Entry code     — day of check_in: 2h before checkin_time
-  4. Checkout       — 2h before checkout_time
-  5. Review         — manual only (from dashboard)
+  1. Confirmation      — triggered immediately on new booking (if phone exists)
+  2. Pre-arrival        — 48h before check_in at 10:00  ← מדולג אם פחות מ-48h
+  3. Entry code prepare  — אותה נקודת זמן כמו pre_arrival: מחשב קוד מוצע
+                            (proposed_entry_code) בלבד — לא יוצר ב-TTLock,
+                            לא שולח. מיועד לאישור/עריכה ידניים מהדשבורד.
+  4. Entry code fallback — 4h לפני checkin_time בפועל: אם עדיין לא אושר
+                            ידנית (entry_code still null) — יוצר בפועל
+                            ושולח אוטומטית, עם הקוד המוצע כברירת מחדל.
+  5. Checkout            — 2h before checkout_time
+  6. Review              — manual only (from dashboard)
 """
 import logging
+import random
+import re
 from datetime import date, datetime, time, timedelta
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -46,7 +53,10 @@ def schedule_booking_messages(booking: Booking):
 
     Logic:
     - Pre-arrival (48h before): נשלח רק אם יש יותר מ-48 שעות לכניסה
-    - Entry code: תמיד מתוזמן (אם בעתיד)
+    - Entry code prepare: אותה נקודת זמן כמו pre_arrival (או "כרגע" אם
+      פחות מ-48 שעות) — מחשב קוד מוצע, לא נוגע ב-TTLock/WhatsApp
+    - Entry code fallback: 4 שעות לפני checkin_time בפועל — יוצר+שולח
+      אוטומטית אם לא אושר ידנית קודם
     - Checkout: תמיד מתוזמן (אם בעתיד)
     """
     if not booking.guest_phone or not booking.check_in:
@@ -66,12 +76,23 @@ def schedule_booking_messages(booking: Booking):
     else:
         logger.info(f"Booking {bid}: skipping pre_arrival — only {hours_to_checkin:.1f}h to check-in")
 
-    # 3. Entry code — check_in day, 2h before checkin_time
+    # 3+4. Entry code — prepare (proposal only) + fallback (auto create+send)
+    #      גם אם ההזמנה last-minute (פחות מ-48h) — עדיין מתזמנים את שניהם,
+    #      רק "עכשיו" במקום בעוד יומיים, כי אורח עדיין צריך קוד לדלת.
     checkin_time = _parse_time(booking.checkin_time) if booking.checkin_time else _checkin_time(booking.check_in)
-    entry_dt = datetime.combine(booking.check_in, checkin_time) - timedelta(hours=2)
-    _add_job(f"entry_{bid}", entry_dt, bid, "entry_code", phone, booking)
 
-    # 4. Checkout — 2h before checkout_time
+    prepare_dt = pre_arrival_dt
+    if prepare_dt <= now:
+        prepare_dt = now + timedelta(seconds=5)
+
+    fallback_dt = datetime.combine(booking.check_in, checkin_time) - timedelta(hours=4)
+    if fallback_dt <= prepare_dt:
+        fallback_dt = prepare_dt + timedelta(minutes=1)
+
+    _add_prepare_job(f"prepare_entry_{bid}", prepare_dt, bid)
+    _add_job(f"entry_{bid}", fallback_dt, bid, "entry_code", phone, booking)
+
+    # 5. Checkout — 2h before checkout_time
     checkout_time = _parse_time(booking.checkout_time) if booking.checkout_time else _checkout_time(booking.check_in)
     checkout_dt = datetime.combine(booking.check_out, checkout_time) - timedelta(hours=2)
     _add_job(f"checkout_{bid}", checkout_dt, bid, "checkout", phone, booking)
@@ -79,12 +100,14 @@ def schedule_booking_messages(booking: Booking):
 
 def cancel_scheduled_jobs(booking_id: int):
     """
-    מבטל כל job מתוזמן (pre_arrival / entry_code / checkout) עבור הזמנה —
-    נקרא כשמתקבל reservation.cancelled. לא זורק שגיאה אם job לא קיים
-    (כבר רץ, או שאבד בדיפלוי הקודם — זה בדיוק המצב שהגנת ה-status
-    ב-assign_passcode_to_booking/_send_scheduled נועדה לכסות בנוסף).
+    מבטל כל job מתוזמן (pre_arrival / prepare_entry / entry / checkout)
+    עבור הזמנה — נקרא כשמתקבל reservation.cancelled, וגם אחרי אישור ידני
+    של קוד כניסה (כדי שה-fallback לא ירוץ שוב על הזמנה שכבר נשלחה).
+    לא זורק שגיאה אם job לא קיים (כבר רץ, או שאבד בדיפלוי הקודם — זה
+    בדיוק המצב שהגנת ה-status ב-assign_passcode_to_booking/_send_scheduled
+    נועדה לכסות בנוסף).
     """
-    for prefix in ("pre_arrival", "entry", "checkout"):
+    for prefix in ("pre_arrival", "prepare_entry", "entry", "checkout"):
         job_id = f"{prefix}_{booking_id}"
         try:
             scheduler.remove_job(job_id)
@@ -117,6 +140,56 @@ def _add_job(job_id: str, run_at: datetime, booking_id: int,
         },
     )
     logger.info(f"Scheduled {job_id} for {run_at}")
+
+
+def _add_prepare_job(job_id: str, run_at: datetime, booking_id: int):
+    scheduler.add_job(
+        _prepare_entry_code,
+        trigger=DateTrigger(run_date=run_at),
+        id=job_id,
+        replace_existing=True,
+        kwargs={"booking_id": booking_id},
+    )
+    logger.info(f"Scheduled {job_id} for {run_at}")
+
+
+async def _prepare_entry_code(booking_id: int):
+    """
+    מחשב קוד כניסה **מוצע** ושומר ב-booking.proposed_entry_code —
+    לא נוגע ב-TTLock ולא שולח שום הודעה. זה מה שמאפשר לרפי לראות/לערוך
+    את הקוד בדשבורד לפני שהוא נוצר בפועל (ראו BookingDetail.jsx).
+    אידמפוטנטי: אם כבר יש proposed_entry_code או entry_code — לא עושה כלום.
+    """
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Booking).where(Booking.id == booking_id))
+        booking = result.scalar_one_or_none()
+        if booking is None:
+            return
+        if (booking.status or "").strip().lower() == "cancelled":
+            return
+        if booking.entry_code or booking.proposed_entry_code:
+            return
+
+        digits = re.sub(r"\D", "", booking.guest_phone or "")
+        code = digits[-4:] if len(digits) >= 4 else str(random.randint(1000, 9999))
+
+        booking.proposed_entry_code = code
+        db.add(booking)
+        await db.commit()
+        logger.info(f"Booking {booking_id}: proposed entry code prepared ({code})")
+
+
+async def send_entry_code_now(booking: Booking, db: AsyncSession):
+    """
+    נקרא מ-locks.py אחרי אישור ידני (assign-code) — שולח את הודעת קוד
+    הכניסה עכשיו (מניח ש-booking.entry_code כבר נוצר בפועל ב-TTLock),
+    ומבטל את ה-jobs המתוזמנים כדי שה-fallback האוטומטי לא ירוץ שוב.
+    אידמפוטנטי דרך _send_if_not_sent (MessageLog) — קריאה כפולה לא
+    תשלח הודעה כפולה.
+    """
+    await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone,
+                             _build_body("entry_code", booking), db)
+    cancel_scheduled_jobs(booking.id)
 
 
 async def _send_scheduled(booking_id: int, message_type: str, phone: str, body: str):
@@ -167,7 +240,7 @@ async def _create_ttlock_and_build_body(booking_id: int, db: AsyncSession) -> st
             logger.info(f"TTLock: booking {booking_id} already has a code, reusing")
             return _build_body("entry_code", booking)
 
-        code = await assign_passcode_to_booking(booking, db)
+        code = await assign_passcode_to_booking(booking, db, passcode=booking.proposed_entry_code or None)
         if not code:
             logger.error(f"TTLock: failed to create code for booking {booking_id}")
             return None
@@ -294,19 +367,6 @@ def _build_body(message_type: str, booking: Booking) -> str:
 
 # ---------------------------------------------------------------------------
 # Reconciliation — safety net for the deploy-wipes-memory problem
-#
-# ה-scheduler הזה משתמש ב-MemoryJobStore (ברירת המחדל של APScheduler) —
-# כל ה-jobs שנרשמו ב-schedule_booking_messages נמחקים בכל דיפלוי/הפעלה
-# מחדש של התהליך ב-Railway, בלי שום שגיאה גלויה. מכיוון שרפי עושה
-# דיפלוי הרבה פעמים ביום, זה אומר שהזמנות רבות היו עלולות "לפספס"
-# את קוד הכניסה שלהן בשקט.
-#
-# הפתרון: job שרץ כל 30 דקות (ועוד פעם אחת מיד באתחול, כדי לא לחכות
-# עד לסבב הראשון), סורק את כל ההזמנות הפעילות, ומזהה כל מקרה שבו
-# הגיע הזמן ל-entry_code/checkout אבל זה עדיין לא קרה בפועל —
-# בין אם כי ה-job המקורי אבד בדיפלוי, ובין אם מכל סיבה אחרת.
-# האידמפוטנטיות (booking.entry_code / MessageLog) מבטיחה שזה לא
-# ייצור קודים כפולים או ישלח הודעות כפולות.
 # ---------------------------------------------------------------------------
 
 @scheduler.scheduled_job("interval", minutes=30, id="reconcile_pending_jobs")
@@ -315,8 +375,7 @@ async def reconcile_pending_jobs():
 
 
 async def run_reconciliation_now():
-    """נקרא פעם אחת מ-main.py מיד אחרי scheduler.start(), כדי לכסות
-    את הפער בין רגע האתחול לבין הריצה המחזורית הראשונה (עד 30 דקות)."""
+    """נקרא פעם אחת מ-main.py מיד אחרי scheduler.start()."""
     await _run_reconciliation()
 
 
@@ -334,19 +393,23 @@ async def _run_reconciliation():
             continue
 
         try:
-            # --- קוד כניסה: הגיע הזמן, וההזמנה עדיין בתוך חלון השהייה ---
             checkin_time = _parse_time(booking.checkin_time) if booking.checkin_time else _checkin_time(booking.check_in)
-            entry_due_at = datetime.combine(booking.check_in, checkin_time) - timedelta(hours=2)
-            if now >= entry_due_at and now.date() <= booking.check_out:
+
+            # --- הכנת קוד מוצע: אם עדיין אין proposed ואין entry_code בפועל ---
+            prepare_due_at = datetime.combine(booking.check_in - timedelta(days=2), time(10, 0))
+            if (now >= prepare_due_at and not booking.entry_code
+                    and not booking.proposed_entry_code and now.date() <= booking.check_out):
+                await _prepare_entry_code(booking.id)
+
+            # --- Fallback: יצירה+שליחה בפועל אם לא אושר ידנית, 4h לפני checkin ---
+            entry_due_at = datetime.combine(booking.check_in, checkin_time) - timedelta(hours=4)
+            if now >= entry_due_at and now.date() <= booking.check_out and not booking.entry_code:
                 await _send_scheduled(
                     booking.id, "entry_code", booking.guest_phone,
                     _build_body("entry_code", booking),
                 )
 
             # --- יציאה: הגיע הזמן — מוחק קוד (אם קיים) ושולח הודעת יציאה ---
-            # מגבילים לחלון של 7 ימים אחורה, כדי לא "לגלות מחדש" ולשלוח
-            # הודעת יציאה להזמנות היסטוריות ישנות שמעולם לא קיבלו MessageLog
-            # (מלפני שהמערכת הזו נבנתה) בכל ריצת reconciliation.
             checkout_time = _parse_time(booking.checkout_time) if booking.checkout_time else _checkout_time(booking.check_in)
             checkout_due_at = datetime.combine(booking.check_out, checkout_time) - timedelta(hours=2)
             recent_enough = booking.check_out >= (now.date() - timedelta(days=7))
