@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.models import Booking
-from app.scheduler import trigger_confirmation, schedule_booking_messages
+from app.scheduler import trigger_confirmation, schedule_booking_messages, cancel_scheduled_jobs
 
 router = APIRouter()
 security = HTTPBasic()
@@ -105,9 +105,14 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     guest_phone = header.get("phone") or ""
     guest_email = header.get("email") or None
 
-    # header.rooms is an array; our schema currently stores ONE room per
-    # booking, so we take the first room (matches the 2-cabin property —
-    # revisit if a reservation ever spans both cabins at once).
+    # header.rooms is an array; our schema stores ONE room per booking.
+    # CONFIRMED (booking 460, 8.7.26): a reservation spanning both cabins
+    # doesn't arrive as two array entries — MiniHotel sends it as a single
+    # room whose raw roomNumber/roomType is literally "Des_Sea" (this is
+    # the dedicated 3rd MiniHotel listing used for Airbnb bookings of both
+    # cabins together, since Airbnb can't offer 2 separate units as one
+    # listing). So taking first_room is correct; the actual multi-lock
+    # complexity lives downstream in ttlock.py (_resolve_lock_ids), not here.
     header_rooms = header.get("rooms") or []
     first_room = header_rooms[0] if header_rooms else {}
     room_name = _normalise_room(first_room.get("roomNumber"), first_room.get("roomType"))
@@ -159,6 +164,14 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
 
     await db.commit()
     await db.refresh(booking)
+
+    # הזמנה בוטלה — מבטלים כל job מתוזמן שנרשם לה קודם (pre_arrival,
+    # entry_code, checkout). לא סומכים רק על זה (ה-job היה נמחק ממילא
+    # בדיפלוי הבא כי אין persistence — לכן יש גם הגנה בזמן-ריצה ב-
+    # assign_passcode_to_booking), אבל זה מונע שליחה מיותרת אם אין
+    # דיפלוי בין הביטול לבין מועד ה-job.
+    if mh_status == "CL":
+        cancel_scheduled_jobs(booking.id)
 
     # New confirmed booking with a phone number → send confirmation now,
     # schedule the rest of the automated messages.
@@ -254,10 +267,13 @@ def _map_status(mh_status: str) -> str:
 def _normalise_room(room_number: str | None, room_type: str | None = None) -> str:
     """Map MiniHotel's roomNumber/roomType to our internal desert/sea naming.
 
-    NOTE: these mappings were guessed during initial development and have
-    NOT been confirmed against a real MiniHotel event yet. When the first
-    real reservation.* webhook arrives, check the `raw_room` field in the
-    response (or Railway logs) and correct this mapping if needed.
+    CONFIRMED against real MiniHotel events (8.7.26, via Yuval's test
+    booking 460): the "0101"/"0102"/"1"/"2" entries below are still
+    unconfirmed guesses (kept as-is until we see one fire for real), but
+    the fallback path IS confirmed correct — MiniHotel's combined-cabin
+    listing sends its raw value as literally "Des_Sea", which falls
+    through to the `return room_number or room_type` line below and is
+    then picked up by ttlock.py's _resolve_lock_ids() as the dual-lock case.
     """
     mapping = {
         "0101": "Sea",
