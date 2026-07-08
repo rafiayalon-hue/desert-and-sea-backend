@@ -213,23 +213,32 @@ ttlock_client = TTLockClient()
 
 # ── Module-level helpers expected by app.api.routes.locks ───────────────
 
-def _resolve_lock_id(room_name: str) -> int:
+def _resolve_lock_ids(room_name: str) -> list[int]:
     """
     ממפה את שם החדר (כפי שמגיע מ-MiniHotel, למשל 'צימר מדבר' / 'צימר ים')
-    ל-lock_id הנכון. בודק לפי הימצאות המילה 'מדבר' או 'ים' בתוך השם,
+    ל-lock_id(ים) הנכון(ים). בודק לפי הימצאות המילה 'מדבר' או 'ים' בתוך השם,
     כדי לא להיות תלוי בניסוח מדויק (רישיות/רווחים/עברית-אנגלית).
 
     כולל גם תמיכה ב-'sesert' — שגיאת כתיב היסטורית (צריך 'desert') שקיימת
     בחלק מהנתונים הישנים (יבוא Excel / webhook גרסה קודמת). ה-frontend
     (useBookings.js) כבר מזהה את הכינוי הזה — כאן מיושר לאותה התנהגות.
+
+    IMPORTANT — 'des_sea' (הנכס השלישי במיניהוטל, ששני הצימרים ביחד,
+    בעיקר להזמנות Airbnb): נבדק ראשון, ובנפרד מ-'desert'/'sea' הבודדים,
+    כי 'sea' הוא תת-מחרוזת של 'des_sea' — בדיקת 'sea in room' לפני הבדיקה
+    הזו הייתה מחזירה בטעות רק את מנעול הים ומשאירה את הצימר מדבר בלי קוד.
+    הנורמליזציה (lower + strip + הסרת רווחים) עקבית עם bookings.py
+    (occupancy_stats), כדי ששני המקומות יזהו 'des_sea' באותו אופן בדיוק.
     """
-    name = room_name or ""
-    lowered = name.lower()
-    if "מדבר" in name or "desert" in lowered or "sesert" in lowered:
-        return LOCK_IDS["desert"]
-    if "ים" in name or "sea" in lowered:
-        return LOCK_IDS["sea"]
-    raise ValueError(f"לא ניתן לזהות חדר (desert/sea) מתוך room_name: {room_name!r}")
+    normalised = (room_name or "").strip().lower().replace(" ", "")
+
+    if "des_sea" in normalised:
+        return [LOCK_IDS["desert"], LOCK_IDS["sea"]]
+    if "מדבר" in (room_name or "") or "desert" in normalised or "sesert" in normalised:
+        return [LOCK_IDS["desert"]]
+    if "ים" in (room_name or "") or "sea" in normalised:
+        return [LOCK_IDS["sea"]]
+    raise ValueError(f"לא ניתן לזהות חדר (desert/sea/des_sea) מתוך room_name: {room_name!r}")
 
 
 def _parse_hhmm(value: str | None, default_hour: int, default_minute: int = 0) -> tuple[int, int]:
@@ -261,22 +270,27 @@ async def list_passcodes(lock_id: int) -> list[dict]:
 
 async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -> str:
     """
-    יוצר קוד כניסה להזמנה במנעול הנכון (לפי booking.room_name),
+    יוצר קוד כניסה להזמנה במנעול(ים) הנכון(ים) (לפי booking.room_name),
     שומר אותו ב-booking.entry_code, ומחזיר את הקוד.
 
-    אם passcode לא סופק:
-      - ברירת המחדל היא 4 הספרות האחרונות של מספר הטלפון של האורח
-        (עקבי עם המוסכמה הקיימת בעסק — כל הקודים ההיסטוריים הם 4 ספרות,
-        ומזכה גם לאורח לזכור קל יותר).
-      - אם אין מספר טלפון עם לפחות 4 ספרות — נוצר קוד רנדומלי בן 4 ספרות.
+    אם ה-room_name הוא הזמנה משולבת (des_sea — שני הצימרים ביחד),
+    אותו קוד נוצר על שני המנעולים בבת אחת, כדי שלאורח יהיה קוד אחד
+    שפותח את שתי הדלתות. ה-keyboardPwdId של כל מנעול נשמר ב-
+    booking.ttlock_pwd_ids (מופרד בפסיקים), כדי שמחיקה בהמשך תהיה
+    מדויקת (במקום להסתמך רק על חיפוש לפי שם).
 
-    חלון התוקף: לפי booking.checkin_time / booking.checkout_time בפועל
-    (כולל דקות — חשוב לשבתות עם שעת יציאה חריגה כמו 16:30), עם ברירת
-    מחדל של 14:00/12:00 אם לא נקבעה שעה ידנית להזמנה הזו.
-    שם הקוד במנעול נשמר כ-'BK{booking.id}' כדי שנוכל לאתר ולמחוק אותו
-    בבירור (booking.entry_code בלבד לא מספיק כי אין עמודת keyboard_pwd_id).
+    אם יצירת הקוד על מנעול שני נכשלת אחרי שהראשון כבר נוצר — מוחקים
+    את מה שכבר נוצר ומעלים את השגיאה הלאה, כדי לא להשאיר מצב חצי-מוצלח
+    (קוד שעובד רק על דלת אחת מתוך שתיים, בלי שאף אחד ידע).
+
+    הזמנה שבוטלה (status == 'cancelled') לא מקבלת קוד בכלל — זה מגן
+    גם מפני ה-job המתוזמן וגם מפני ריצת ה-reconciliation, בלי תלות
+    בכך שמישהו זכר לבטל את ה-job הספציפי.
     """
-    lock_id = _resolve_lock_id(booking.room_name)
+    if (booking.status or "").strip().lower() == "cancelled":
+        raise ValueError(f"הזמנה {booking.id} בוטלה — לא יוצרים קוד כניסה")
+
+    lock_ids = _resolve_lock_ids(booking.room_name)
 
     if not passcode:
         digits = re.sub(r"\D", "", booking.guest_phone or "")
@@ -295,15 +309,32 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
 
     passcode_name = f"BK{booking.id}"
 
-    await ttlock_client.add_passcode(
-        lock_id=lock_id,
-        passcode=passcode,
-        passcode_name=passcode_name,
-        start_date=start_ms,
-        end_date=end_ms,
-    )
+    created_pwd_ids: list[str] = []
+    try:
+        for lock_id in lock_ids:
+            result = await ttlock_client.add_passcode(
+                lock_id=lock_id,
+                passcode=passcode,
+                passcode_name=passcode_name,
+                start_date=start_ms,
+                end_date=end_ms,
+            )
+            pwd_id = result.get("keyboardPwdId")
+            if pwd_id is not None:
+                created_pwd_ids.append(f"{lock_id}:{pwd_id}")
+    except Exception:
+        # נכשל באמצע (למשל על המנעול השני) — מנקים את מה שכבר נוצר
+        # כדי לא להשאיר קוד יתום שפותח רק דלת אחת מתוך שתיים.
+        for entry in created_pwd_ids:
+            lid_str, pwd_id_str = entry.split(":")
+            try:
+                await ttlock_client.delete_passcode(int(lid_str), int(pwd_id_str))
+            except Exception:
+                pass  # best-effort cleanup; השגיאה המקורית חשובה יותר
+        raise
 
     booking.entry_code = passcode
+    booking.ttlock_pwd_ids = ",".join(created_pwd_ids)
     db.add(booking)
     await db.commit()
 
@@ -312,22 +343,46 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
 
 async def remove_passcode_after_checkout(booking, db) -> bool:
     """
-    מוחק את קוד הכניסה של ההזמנה מהמנעול (מאותר לפי השם 'BK{booking.id}'
-    שנשמר בזמן היצירה), ומנקה את booking.entry_code.
+    מוחק את קוד הכניסה של ההזמנה מהמנעול(ים) הרלוונטי(ים).
+
+    אם booking.ttlock_pwd_ids קיים (נשמר בזמן היצירה) — משתמשים בו
+    למחיקה מדויקת של כל lock_id:keyboardPwdId בלי צורך בחיפוש.
+    אחרת (הזמנות ישנות שנוצרו לפני התוספת הזו) — נופלים חזרה לחיפוש
+    לפי השם 'BK{booking.id}' בכל המנעולים הרלוונטיים ל-room_name.
+
+    מנקה תמיד את booking.entry_code / ttlock_pwd_ids בסוף, גם אם לא
+    נמצא קוד בפועל (למקרה שכבר נמחק, או שמעולם לא נוצר).
     מחזיר True אם נמצא ונמחק קוד בפועל, False אם לא היה קוד להזמנה הזו.
     """
-    lock_id = _resolve_lock_id(booking.room_name)
     passcode_name = f"BK{booking.id}"
+    deleted_any = False
 
-    passcodes = await ttlock_client.list_passcodes(lock_id)
-    target = next((p for p in passcodes if p.get("keyboardPwdName") == passcode_name), None)
+    if booking.ttlock_pwd_ids:
+        for entry in booking.ttlock_pwd_ids.split(","):
+            entry = entry.strip()
+            if not entry or ":" not in entry:
+                continue
+            lid_str, pwd_id_str = entry.split(":", 1)
+            try:
+                await ttlock_client.delete_passcode(int(lid_str), int(pwd_id_str))
+                deleted_any = True
+            except Exception:
+                pass  # ייתכן שכבר נמחק ידנית — לא עוצרים בגללו
+    else:
+        try:
+            lock_ids = _resolve_lock_ids(booking.room_name)
+        except ValueError:
+            lock_ids = []
+        for lock_id in lock_ids:
+            passcodes = await ttlock_client.list_passcodes(lock_id)
+            target = next((p for p in passcodes if p.get("keyboardPwdName") == passcode_name), None)
+            if target:
+                await ttlock_client.delete_passcode(lock_id, target["keyboardPwdId"])
+                deleted_any = True
 
     booking.entry_code = None
+    booking.ttlock_pwd_ids = None
     db.add(booking)
     await db.commit()
 
-    if not target:
-        return False
-
-    await ttlock_client.delete_passcode(lock_id, target["keyboardPwdId"])
-    return True
+    return deleted_any
