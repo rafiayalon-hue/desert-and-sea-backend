@@ -24,6 +24,10 @@ class Booking(Base):
     # מצב
     status: Mapped[str] = mapped_column(String(50), default="confirmed")
     entry_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # קוד מוצע (טרם נוצר בפועל ב-TTLock) — מחושב 48 שעות לפני ההגעה (או מיד
+    # אם ההזמנה נוצרה עם פחות התראה), לצורך תצוגה/עריכה לפני שהוא הופך
+    # בפועל ל-entry_code. ראו app/scheduler.py — _prepare_entry_code.
+    proposed_entry_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Comma-separated TTLock keyboardPwdId values — needed when a booking spans
     # BOTH cabins (room_name contains "des_sea") and gets a passcode on two
     # locks at once. Column already exists in DB (see main.py ALTER TABLE);
