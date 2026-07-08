@@ -9,6 +9,7 @@ from app.integrations.ttlock import (
     get_lock_status,
     LOCK_IDS,
 )
+from app.scheduler import send_entry_code_now
 from app.models import Booking
 
 router = APIRouter()
@@ -55,6 +56,12 @@ async def assign_code(
         raise HTTPException(status_code=400, detail="חסרות תאריכי כניסה/יציאה")
 
     code = await assign_passcode_to_booking(booking, db, passcode)
+
+    # שולח את הודעת קוד-הכניסה עכשיו (אידמפוטנטי — אם כבר נשלחה לא ישלח
+    # שוב), ומבטל את ה-fallback האוטומטי כדי שלא ירוץ שוב על הזמנה הזו.
+    if booking.guest_phone:
+        await send_entry_code_now(booking, db)
+
     return {
         "booking_id": booking_id,
         "entry_code": code,
