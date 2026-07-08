@@ -10,7 +10,7 @@ from app.api.routes import bookings, guests, locks, messages, settings
 from app.api.routes import guests_merge
 from app.api.routes import webhook          # NEW
 from app.database import engine, Base
-from app.scheduler import scheduler         # NEW
+from app.scheduler import scheduler, run_reconciliation_now         # NEW
 
 
 @asynccontextmanager
@@ -56,6 +56,11 @@ async def lifespan(app: FastAPI):
 
     # Start APScheduler
     scheduler.start()
+
+    # רשת ביטחון: משלים מיד כל entry_code/checkout job שאבד בדיפלוי
+    # האחרון (ה-scheduler הוא in-memory בלבד — ראו app/scheduler.py),
+    # במקום לחכות עד לסבב המחזורי הראשון (עד 30 דקות).
+    await run_reconciliation_now()
 
     yield  # ── app is running ──────────────────────────────────────────
 
