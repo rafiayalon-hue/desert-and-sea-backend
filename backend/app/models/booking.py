@@ -24,6 +24,11 @@ class Booking(Base):
     # מצב
     status: Mapped[str] = mapped_column(String(50), default="confirmed")
     entry_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Comma-separated TTLock keyboardPwdId values — needed when a booking spans
+    # BOTH cabins (room_name contains "des_sea") and gets a passcode on two
+    # locks at once. Column already exists in DB (see main.py ALTER TABLE);
+    # this was missing from the ORM model so it was previously unreadable/unwritable.
+    ttlock_pwd_ids: Mapped[str | None] = mapped_column(String(100), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     checkin_time: Mapped[str | None] = mapped_column(String(10), nullable=True)
     checkout_time: Mapped[str | None] = mapped_column(String(10), nullable=True)
