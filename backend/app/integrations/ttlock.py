@@ -341,6 +341,42 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
     return passcode
 
 
+async def update_passcode_window(booking, db) -> bool:
+    """
+    מעדכן את חלון התוקף **בפועל במנעול** לפי checkin_time/checkout_time
+    העדכניים של ההזמנה — נקרא מ-bookings.py כשמתקנים שעות ידנית אחרי
+    שקוד כבר נוצר (למשל יציאה מאוחרת בסופ"ש). בלי זה, תיקון ידני
+    בדשבורד היה משנה רק את מה שמוצג במסך, לא את מה שה-TTLock אוכף בפועל
+    בשטח — האורח היה ננעל בחוץ/פנימה לפי החלון הישן.
+
+    משתמש ב-change_passcode (היה קיים ב-client אבל אף אחד לא קרא לו).
+    פועל על כל המנעולים ב-ttlock_pwd_ids (גם עבור des_sea — שני המנעולים).
+    מחזיר True אם עודכן בפועל, False אם אין קוד קיים לעדכן (אין מה לעשות).
+    """
+    if not booking.entry_code or not booking.ttlock_pwd_ids:
+        return False
+
+    checkin_hour, checkin_minute = _parse_hhmm(getattr(booking, "checkin_time", None), 14, 0)
+    checkout_hour, checkout_minute = _parse_hhmm(getattr(booking, "checkout_time", None), 12, 0)
+    start_dt = datetime.combine(booking.check_in, datetime.min.time()).replace(hour=checkin_hour, minute=checkin_minute)
+    end_dt = datetime.combine(booking.check_out, datetime.min.time()).replace(hour=checkout_hour, minute=checkout_minute)
+    start_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000)
+
+    updated_any = False
+    for entry in booking.ttlock_pwd_ids.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        lid_str, pwd_id_str = entry.split(":", 1)
+        try:
+            await ttlock_client.change_passcode(int(lid_str), int(pwd_id_str), start_ms, end_ms)
+            updated_any = True
+        except Exception:
+            pass  # best-effort — לא עוצרים את שמירת הבקינג בגלל זה
+
+    return updated_any
+  
 async def remove_passcode_after_checkout(booking, db) -> bool:
     """
     מוחק את קוד הכניסה של ההזמנה מהמנעול(ים) הרלוונטי(ים).
