@@ -56,7 +56,7 @@ def _whatsapp_address(to_phone: str) -> str:
 CONTENT_SIDS = {
     "confirmation": "HX60438a1a8fc85e4b4e2a345340518a22",
     "pre_arrival": "HX1e7b8909b9c0dd6a9d087abb02738dee",
-    "entry_code": "HX9efa858e77a00f0850bf89cfeeee28f9",  # door_entry_details
+    "entry_code": "HXe8412c1fc29af47dafe3f4c59b193582",  # door_access_instructions
     "checkout": "HX4a3baa4df38782b23d77ae46c5b67c1c",
 }
 
