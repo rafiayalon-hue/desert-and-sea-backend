@@ -9,6 +9,7 @@ import os
 from app.api.routes import bookings, guests, locks, messages, settings
 from app.api.routes import guests_merge
 from app.api.routes import webhook          # NEW
+from app.routers import public_checkin      # NEW — עמוד קוד כניסה באתר הציבורי
 from app.database import engine, Base
 from app.scheduler import scheduler, run_reconciliation_now         # NEW
 
@@ -34,7 +35,7 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_returning_guest BOOLEAN DEFAULT FALSE"))
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ttlock_pwd_ids TEXT"))
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS proposed_entry_code VARCHAR(20)"))
-        
+
         # message_log table (idempotent)
         await conn.execute(text("""
             CREATE TABLE IF NOT EXISTS message_log (
@@ -53,6 +54,25 @@ async def lifespan(app: FastAPI):
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_message_log_booking_type "
             "ON message_log (booking_id, message_type) "
             "WHERE booking_id IS NOT NULL"
+        ))
+
+        # checkin_tokens table (idempotent) — NEW: עמוד קוד כניסה באתר הציבורי
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS checkin_tokens (
+                id          SERIAL PRIMARY KEY,
+                booking_id  INTEGER REFERENCES bookings(id) NOT NULL,
+                token       VARCHAR(64) UNIQUE NOT NULL,
+                expires_at  DATE NOT NULL,
+                created_at  TIMESTAMP DEFAULT NOW()
+            )
+        """))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_checkin_tokens_booking_id "
+            "ON checkin_tokens (booking_id)"
+        ))
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_checkin_tokens_token "
+            "ON checkin_tokens (token)"
         ))
 
     # Start APScheduler
@@ -84,6 +104,8 @@ app.add_middleware(
         "https://desert-and-sea.vercel.app",
         "https://*.vercel.app",
         "https://desert-and-sea-production.up.railway.app",
+        "https://desertandsea.co.il",          # NEW — האתר הציבורי (וורדפרס) קורא ל-/public/entry-code משם
+        "https://www.desertandsea.co.il",       # NEW — ודא שזה הדומיין האמיתי, תחליף אם שונה
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -97,6 +119,7 @@ app.include_router(messages.router, prefix="/api/messages",  tags=["messages"])
 app.include_router(settings.router, prefix="/api/settings",  tags=["settings"])
 app.include_router(webhook.router,  prefix="/api/webhook",   tags=["webhook"])  # NEW
 app.include_router(guests_merge.router, prefix="/api/guests", tags=["guests"])
+app.include_router(public_checkin.router)   # NEW — /public/entry-code/{token}
 
 
 @app.get("/api/health")
