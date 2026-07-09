@@ -345,9 +345,9 @@ async def update_passcode_window(booking, db) -> bool:
     """
     מעדכן את חלון התוקף **בפועל במנעול** לפי checkin_time/checkout_time
     העדכניים של ההזמנה — נקרא מ-bookings.py כשמתקנים שעות ידנית אחרי
-    שקוד כבר נוצר (למשל יציאה מאוחרת בסופ"ש). בלי זה, תיקון ידני
+    שקוד כבר נוצר (למשל יציאה מאוחרת בסופ"ע). בלי זה, תיקון ידני
     בדשבורד היה משנה רק את מה שמוצג במסך, לא את מה שה-TTLock אוכף בפועל
-    בשטח — האורח היה ננעל בחוץ/פנימה לפי החלון הישן.
+    בשטח — האורח היה ננעול בחוץ/פנימה לפי החלון הישן.
 
     משתמש ב-change_passcode (היה קיים ב-client אבל אף אחד לא קרא לו).
     פועל על כל המנעולים ב-ttlock_pwd_ids (גם עבור des_sea — שני המנעולים).
@@ -376,7 +376,8 @@ async def update_passcode_window(booking, db) -> bool:
             pass  # best-effort — לא עוצרים את שמירת הבקינג בגלל זה
 
     return updated_any
-  
+
+
 async def remove_passcode_after_checkout(booking, db) -> bool:
     """
     מוחק את קוד הכניסה של ההזמנה מהמנעול(ים) הרלוונטי(ים).
