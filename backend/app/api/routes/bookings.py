@@ -368,7 +368,7 @@ async def update_booking(
     phone_just_added = (not had_phone) and bool(booking.guest_phone)
     if phone_just_added:
         await trigger_confirmation(booking, db)
-        schedule_booking_messages(booking)
+        await schedule_booking_messages(booking, db)
 
     return {
         **booking.__dict__,
