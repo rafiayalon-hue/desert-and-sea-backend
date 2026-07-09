@@ -17,6 +17,12 @@ Schedule:
 Templates מאושרים (ראו app/integrations/whatsapp.py, CONTENT_SIDS) במקום
 טקסט חופשי — נדרש ע"י Meta לכל הודעה שהעסק יוזם. _build_body עדיין קיימת
 ומשמשת לתיעוד קריא בעברית ב-MessageLog.body, אבל היא לא מה שנשלח בפועל.
+
+הערה (9.7.26 #2): תבנית "entry_code" לא מכילה יותר את הקוד עצמו בגוף
+ההודעה — מטא דוחה אוטומטית כל תבנית Utility עם ערך שנראה כמו קוד אימות
+(3 ניסיונות נדחו). הפתרון: כפתור CTA URL בתבנית שמוביל לעמוד באתר
+הציבורי, שם האורח *רואה* את הקוד (לא מקבל אותו בטקסט). המשתנה שנשלח
+לתבנית הוא לכן טוקן (CheckinToken) ולא booking.entry_code.
 """
 import logging
 from datetime import date, datetime, time, timedelta
@@ -29,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import AsyncSessionLocal
 from app.integrations.whatsapp import send_whatsapp_template
 from app.models import Booking, MessageLog
+from app.models.checkin_token import CheckinToken
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +88,9 @@ async def create_and_send_entry_code(booking_id: int, db: AsyncSession | None = 
             # ב-DB דרך assign_passcode_to_booking — מרעננים כדי שה-variables
             # שנבנים ל-Content Template יכללו את הקוד האמיתי, לא ריק.
             await db.refresh(booking)
+            # יוצר/מוצא טוקן לעמוד "פרטי הכניסה שלי" באתר הציבורי —
+            # זה מה שיישלח לתבנית ה-WhatsApp, לא הקוד עצמו.
+            await _get_or_create_checkin_token(booking, db)
             await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone, booking, db)
     except Exception as e:
         logger.error(f"create_and_send_entry_code error for booking {booking_id}: {e}")
@@ -145,6 +155,29 @@ def cancel_scheduled_jobs(booking_id: int):
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+async def _get_or_create_checkin_token(booking: Booking, db: AsyncSession) -> str:
+    """
+    מחזיר טוקן קיים לעמוד 'פרטי הכניסה שלי' עבור ההזמנה, או יוצר חדש
+    אם עוד אין. הטוקן תקף עד יום ה-checkout (ראו app/models/checkin_token.py).
+    """
+    result = await db.execute(
+        select(CheckinToken).where(CheckinToken.booking_id == booking.id)
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        return existing.token
+
+    new_token = CheckinToken(
+        booking_id=booking.id,
+        token=CheckinToken.generate_token(),
+        expires_at=booking.check_out,
+    )
+    db.add(new_token)
+    await db.flush()
+    logger.info(f"Booking {booking.id}: checkin token created")
+    return new_token.token
+
+
 def _add_job(job_id: str, run_at: datetime, booking_id: int,
              message_type: str, phone: str):
     now = datetime.now()
@@ -174,6 +207,7 @@ async def send_entry_code_now(booking: Booking, db: AsyncSession):
     תשלח הודעה כפולה. לא נוגע ב-jobs מתוזמנים אחרים (pre_arrival/checkout)
     — אלה נשארים כרגיל, קוד הכניסה כבר לא מתוזמן בכלל.
     """
+    await _get_or_create_checkin_token(booking, db)
     await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone, booking, db)
 
 
@@ -239,7 +273,7 @@ async def _send_if_not_sent(booking_id: int, message_type: str,
         return
 
     body = _build_body(message_type, booking)
-    variables = _build_variables(message_type, booking)
+    variables = await _build_variables(message_type, booking, db)
 
     try:
         sid = send_whatsapp_template(phone, message_type, variables)
@@ -290,7 +324,8 @@ def _checkout_time(checkout: date) -> time:
 
 def _build_body(message_type: str, booking: Booking) -> str:
     """טקסט קריא בעברית, נשמר ב-MessageLog לצורך תיעוד/הצגה בדשבורד בלבד
-    — זה לא מה שנשלח בפועל לאורח (ראו _send_if_not_sent)."""
+    — זה לא מה שנשלח בפועל לאורח (ראו _send_if_not_sent). כאן עדיין מציגים
+    את הקוד עצמו — זה תיעוד פנימי לדשבורד, לא הודעת WhatsApp."""
     name = (booking.guest_name or "").split()[0] if booking.guest_name else "אורח"
     room = booking.room_name or ""
     checkin_str = booking.check_in.strftime("%d/%m/%Y") if booking.check_in else ""
@@ -314,10 +349,8 @@ def _build_body(message_type: str, booking: Booking) -> str:
         ),
         "entry_code": (
             f"היי {name}! מחכים לכם בהתרגשות ⛺\n"
-            f"כדי להיכנס לצימר, הקישו {code} על צג המנעול שבדלת.\n"
-            f"המספר הזה יעבוד לאורך כל השהות שלכם.\n"
-            f"בכל שאלה אנחנו כאן בשבילכם.\n"
-            f"נתראה בקרוב!\n"
+            f"(תיעוד פנימי בלבד — הקוד עצמו לא נשלח יותר בטקסט ל-WhatsApp,"
+            f" האורח רואה אותו בקישור. קוד לצפייה בדשבורד: {code})\n"
             f"— Desert & Sea"
         ),
         "checkout": (
@@ -331,22 +364,27 @@ def _build_body(message_type: str, booking: Booking) -> str:
     return templates.get(message_type, "")
 
 
-def _build_variables(message_type: str, booking: Booking) -> dict:
+async def _build_variables(message_type: str, booking: Booking, db: AsyncSession) -> dict:
     """
     בונה את ה-content_variables ({{1}}, {{2}}, ...) לכל תבנית מאושרת,
     בהתאמה מדויקת לסדר המשתנים שהוגדר בכל תבנית ב-Twilio Content
     Template Builder (ראו app/integrations/whatsapp.py, CONTENT_SIDS).
+
+    entry_code: {{2}} הוא כעת טוקן לכפתור ה-URL (עמוד באתר הציבורי),
+    לא הקוד עצמו — ראו הערת 9.7.26 #2 בראש הקובץ.
     """
     name = (booking.guest_name or "").split()[0] if booking.guest_name else "אורח"
     room = booking.room_name or ""
     checkin_str = booking.check_in.strftime("%d/%m/%Y") if booking.check_in else ""
     checkout_str = booking.check_out.strftime("%d/%m/%Y") if booking.check_out else ""
-    code = booking.entry_code or "יישלח בנפרד"
+
+    if message_type == "entry_code":
+        token = await _get_or_create_checkin_token(booking, db)
+        return {"1": name, "2": token}
 
     variables = {
         "confirmation": {"1": name, "2": room, "3": checkin_str, "4": checkout_str},
         "pre_arrival": {"1": name, "2": room, "3": checkin_str},
-        "entry_code": {"1": name, "2": code},
         "checkout": {"1": name, "2": checkout_str},
     }
     return variables.get(message_type, {})
