@@ -1,11 +1,96 @@
 """
 Twilio WhatsApp integration for sending messages to guests.
+
+הודעות שהעסק יוזם (לא בתגובה להודעת אורח) חייבות לעבור דרך WhatsApp
+Content Templates שאושרו מראש ע"י Meta — טקסט חופשי (body=) נחסם מחוץ
+לחלון שירות של 24 שעות מרגע שהאורח כתב לנו. לכן ההודעות האוטומטיות
+(אישור/תזכורת/קוד כניסה/יציאה) נשלחות דרך content_sid + content_variables,
+לא דרך body.
 """
+import json
+import logging
+
 from twilio.rest import Client
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 MAP_MEDIA_URL = "https://selfless-happiness-production.up.railway.app/static/map.jpeg"
 
+# Twilio Content Template SIDs — נוצרו ואושרו ב-Content Template Builder
+# (Desert and Sea project, 9.7.2026). שינוי טקסט תבנית מאושרת מחייב תבנית
+# חדשה + אישור מחדש מ-Meta — אי אפשר לערוך תבנית מאושרת במקום.
+CONTENT_SIDS = {
+    "confirmation": "HX60438a1a8fc85e4b4e2a345340518a22",
+    "pre_arrival": "HX1e7b8909b9c0dd6a9d087abb02738dee",
+    "entry_code": "HX9efa858e77a00f0850bf89cfeeee28f9",  # door_entry_details
+    "checkout": "HX4a3baa4df38782b23d77ae46c5b67c1c",
+}
+
+
+def send_whatsapp_template(to_phone: str, message_type: str, variables: dict) -> str:
+    """
+    שולח הודעת WhatsApp דרך Content Template מאושר — זה מה שה-scheduler
+    האוטומטי משתמש בו (מותר לשלוח יוזמת-עסק מחוץ לחלון שירות).
+    variables: dict עם מפתחות כמחרוזת, למשל {"1": "רפי", "2": "מדבר"} —
+    תואם למספרי {{1}} {{2}} בגוף התבנית ב-Twilio.
+    Returns the Twilio message SID.
+    """
+    content_sid = CONTENT_SIDS.get(message_type)
+    if not content_sid:
+        raise ValueError(f"No content template configured for message_type={message_type}")
+
+    client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+    message = client.messages.create(
+        from_=settings.twilio_whatsapp_from,
+        to=to,
+        content_sid=content_sid,
+        content_variables=json.dumps(variables),
+    )
+    return message.sid
+
+
+def send_whatsapp(to_phone: str, body: str) -> str:
+    """
+    שליחת טקסט חופשי — פועל רק בתוך חלון שירות של 24 שעות (אחרי שהאורח
+    כתב לנו קודם). לא לשימוש בהודעות שהעסק יוזם ראשון. שימושי להודעות
+    ידניות/תגובות מהדשבורד — לא בשימוש ע"י ה-scheduler האוטומטי.
+    Returns the Twilio message SID.
+    """
+    client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+    message = client.messages.create(
+        from_=settings.twilio_whatsapp_from,
+        to=to,
+        body=body,
+    )
+    return message.sid
+
+
+def send_whatsapp_with_map(to_phone: str, body: str) -> str:
+    """
+    שולח הודעת WhatsApp עם תמונת מפה + טקסט חופשי.
+    הערה: כמו send_whatsapp — טקסט חופשי, פועל רק בתוך חלון שירות של 24
+    שעות. לא בשימוש כרגע ע"י ה-scheduler האוטומטי (הודעת קוד הכניסה
+    עברה ל-send_whatsapp_template, שאינו כולל מדיה בשלב זה).
+    Returns the Twilio message SID.
+    """
+    client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
+    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+    message = client.messages.create(
+        from_=settings.twilio_whatsapp_from,
+        to=to,
+        body=body,
+        media_url=[MAP_MEDIA_URL],
+    )
+    return message.sid
+
+
+# --- Legacy multi-language free-text templates -----------------------------
+# נשמר לתאימות לאחור לזרימות ידניות/תגובה מהדשבורד (שם טקסט חופשי כן
+# חוקי, כי הן בתוך חלון שירות). לא בשימוש ע"י ה-scheduler האוטומטי, שעבר
+# ל-CONTENT_SIDS למעלה.
 MESSAGE_TEMPLATES = {
     "pre_arrival": {
         "he": "שלום {name}, אנחנו מצפים לקבל אתכם ב-Desert and Sea! צ'ק-אין ב-{check_in}. לכל שאלה אנחנו כאן.",
@@ -26,35 +111,6 @@ MESSAGE_TEMPLATES = {
         "ru": "Здравствуйте, {name}! Спасибо за пребывание в Desert and Sea! Будем рады видеть вас снова. 🙏",
     },
 }
-
-
-def send_whatsapp(to_phone: str, body: str) -> str:
-    """Send a WhatsApp text message. Returns the Twilio message SID."""
-    client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
-    message = client.messages.create(
-        from_=settings.twilio_whatsapp_from,
-        to=to,
-        body=body,
-    )
-    return message.sid
-
-
-def send_whatsapp_with_map(to_phone: str, body: str) -> str:
-    """
-    שולח הודעת WhatsApp עם תמונת מפה + טקסט.
-    משמש להודעת כניסה (entry_code).
-    Returns the Twilio message SID.
-    """
-    client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
-    message = client.messages.create(
-        from_=settings.twilio_whatsapp_from,
-        to=to,
-        body=body,
-        media_url=[MAP_MEDIA_URL],
-    )
-    return message.sid
 
 
 def build_message(template_key: str, language: str, **kwargs) -> str:
