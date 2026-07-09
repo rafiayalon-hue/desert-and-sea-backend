@@ -12,6 +12,11 @@ Schedule:
   3. Pre-arrival    — 48h before check_in at 10:00  ← מדולג אם פחות מ-48h
   4. Checkout       — 2h before checkout_time
   5. Review         — manual only (from dashboard)
+
+הערה (9.7.26): כל 4 סוגי ההודעות עוברות עכשיו דרך WhatsApp Content
+Templates מאושרים (ראו app/integrations/whatsapp.py, CONTENT_SIDS) במקום
+טקסט חופשי — נדרש ע"י Meta לכל הודעה שהעסק יוזם. _build_body עדיין קיימת
+ומשמשת לתיעוד קריא בעברית ב-MessageLog.body, אבל היא לא מה שנשלח בפועל.
 """
 import logging
 from datetime import date, datetime, time, timedelta
@@ -22,7 +27,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
-from app.integrations.whatsapp import send_whatsapp, send_whatsapp_with_map
+from app.integrations.whatsapp import send_whatsapp_template
 from app.models import Booking, MessageLog
 
 logger = logging.getLogger(__name__)
@@ -39,8 +44,7 @@ async def trigger_confirmation(booking: Booking, db: AsyncSession):
     if not booking.guest_phone:
         logger.info(f"Booking {booking.id}: no phone, skipping confirmation")
         return
-    await _send_if_not_sent(booking.id, "confirmation", booking.guest_phone,
-                             _build_body("confirmation", booking), db)
+    await _send_if_not_sent(booking.id, "confirmation", booking.guest_phone, booking, db)
 
 
 async def create_and_send_entry_code(booking_id: int, db: AsyncSession | None = None):
@@ -73,8 +77,11 @@ async def create_and_send_entry_code(booking_id: int, db: AsyncSession | None = 
         code = await assign_passcode_to_booking(booking, db)
         if code:
             logger.info(f"Booking {booking_id}: entry code {code} created")
-            await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone,
-                                     _build_body("entry_code", booking), db)
+            # ה-booking בזיכרון עדיין לא כולל את entry_code שזה עתה נכתב
+            # ב-DB דרך assign_passcode_to_booking — מרעננים כדי שה-variables
+            # שנבנים ל-Content Template יכללו את הקוד האמיתי, לא ריק.
+            await db.refresh(booking)
+            await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone, booking, db)
     except Exception as e:
         logger.error(f"create_and_send_entry_code error for booking {booking_id}: {e}")
     finally:
@@ -108,14 +115,14 @@ async def schedule_booking_messages(booking: Booking, db: AsyncSession):
     hours_to_checkin = (datetime.combine(booking.check_in, time(14, 0)) - now).total_seconds() / 3600
 
     if hours_to_checkin > 48:
-        _add_job(f"pre_arrival_{bid}", pre_arrival_dt, bid, "pre_arrival", phone, booking)
+        _add_job(f"pre_arrival_{bid}", pre_arrival_dt, bid, "pre_arrival", phone)
     else:
         logger.info(f"Booking {bid}: skipping pre_arrival — only {hours_to_checkin:.1f}h to check-in")
 
     # 3. Checkout — 2h before checkout_time
     checkout_time = _parse_time(booking.checkout_time) if booking.checkout_time else _checkout_time(booking.check_in)
     checkout_dt = datetime.combine(booking.check_out, checkout_time) - timedelta(hours=2)
-    _add_job(f"checkout_{bid}", checkout_dt, bid, "checkout", phone, booking)
+    _add_job(f"checkout_{bid}", checkout_dt, bid, "checkout", phone)
 
 
 def cancel_scheduled_jobs(booking_id: int):
@@ -139,7 +146,7 @@ def cancel_scheduled_jobs(booking_id: int):
 # ---------------------------------------------------------------------------
 
 def _add_job(job_id: str, run_at: datetime, booking_id: int,
-             message_type: str, phone: str, booking: Booking):
+             message_type: str, phone: str):
     now = datetime.now()
     if run_at <= now:
         logger.info(f"Skipping past job {job_id} scheduled for {run_at}")
@@ -154,7 +161,6 @@ def _add_job(job_id: str, run_at: datetime, booking_id: int,
             "booking_id": booking_id,
             "message_type": message_type,
             "phone": phone,
-            "body": _build_body(message_type, booking),
         },
     )
     logger.info(f"Scheduled {job_id} for {run_at}")
@@ -168,12 +174,12 @@ async def send_entry_code_now(booking: Booking, db: AsyncSession):
     תשלח הודעה כפולה. לא נוגע ב-jobs מתוזמנים אחרים (pre_arrival/checkout)
     — אלה נשארים כרגיל, קוד הכניסה כבר לא מתוזמן בכלל.
     """
-    await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone,
-                             _build_body("entry_code", booking), db)
+    await _send_if_not_sent(booking.id, "entry_code", booking.guest_phone, booking, db)
 
 
-async def _send_scheduled(booking_id: int, message_type: str, phone: str, body: str):
-    """Job function — opens its own DB session."""
+async def _send_scheduled(booking_id: int, message_type: str, phone: str):
+    """Job function — opens its own DB session, ומרענן את ה-booking מה-DB
+    בזמן ריצה בפועל (לא לוקח נתונים ישנים מרגע התזמון)."""
     async with AsyncSessionLocal() as db:
         # הגנה: אם ההזמנה בוטלה בין התזמון לבין הריצה בפועל — לא יוצרים
         # קוד TTLock ולא שולחים הודעה בכלל. חשוב במיוחד כי jobs בזיכרון
@@ -191,7 +197,7 @@ async def _send_scheduled(booking_id: int, message_type: str, phone: str, body: 
         # לאחר שליחת הודעת יציאה — מחק קוד TTLock
         if message_type == "checkout":
             await _delete_ttlock_after_checkout(booking_id, db)
-        await _send_if_not_sent(booking_id, message_type, phone, body, db)
+        await _send_if_not_sent(booking_id, message_type, phone, booking, db)
 
 
 async def _delete_ttlock_after_checkout(booking_id: int, db: AsyncSession):
@@ -210,12 +216,16 @@ async def _delete_ttlock_after_checkout(booking_id: int, db: AsyncSession):
 
 
 async def _send_if_not_sent(booking_id: int, message_type: str,
-                             phone: str, body: str, db: AsyncSession):
+                             phone: str, booking: Booking, db: AsyncSession):
     """
     שולח רק אם כבר יש רשומה בסטטוס 'sent' — לא סתם "יש רשומה" (זה היה
     באג: ניסיון כושל, למשל Twilio לא מחובר, היה מסמן את ההודעה כ"טופלה"
     לצמיתות; גם אחרי שTwilio יחובר ההודעה לא הייתה נשלחת לעולם). אם יש
     רשומה קודמת שנכשלה — מעדכנים אותה בניסיון הזה במקום ליצור כפולה.
+
+    שולח בפועל דרך WhatsApp Content Template מאושר (send_whatsapp_template)
+    — לא טקסט חופשי. body עדיין נבנה ונשמר ב-MessageLog לצורך תיעוד קריא
+    בלבד, הוא לא מה שנשלח לאורח.
     """
     existing_result = await db.execute(
         select(MessageLog).where(
@@ -228,11 +238,11 @@ async def _send_if_not_sent(booking_id: int, message_type: str,
         logger.info(f"Booking {booking_id}: {message_type} already sent, skipping")
         return
 
+    body = _build_body(message_type, booking)
+    variables = _build_variables(message_type, booking)
+
     try:
-        if message_type == "entry_code":
-            sid = send_whatsapp_with_map(phone, body)
-        else:
-            sid = send_whatsapp(phone, body)
+        sid = send_whatsapp_template(phone, message_type, variables)
         status = "sent"
     except Exception as e:
         logger.error(f"WhatsApp send failed for booking {booking_id}: {e}")
@@ -279,6 +289,8 @@ def _checkout_time(checkout: date) -> time:
 
 
 def _build_body(message_type: str, booking: Booking) -> str:
+    """טקסט קריא בעברית, נשמר ב-MessageLog לצורך תיעוד/הצגה בדשבורד בלבד
+    — זה לא מה שנשלח בפועל לאורח (ראו _send_if_not_sent)."""
     name = (booking.guest_name or "").split()[0] if booking.guest_name else "אורח"
     room = booking.room_name or ""
     checkin_str = booking.check_in.strftime("%d/%m/%Y") if booking.check_in else ""
@@ -301,10 +313,11 @@ def _build_body(message_type: str, booking: Booking) -> str:
             f"— Desert & Sea"
         ),
         "entry_code": (
-            f"שלום {name}!\n"
-            f"הכל מוכן לקראתכם 🔑\n"
-            f"קוד כניסה: *{code}*\n"
-            f"נתראה היום!\n"
+            f"היי {name}! מחכים לכם בהתרגשות ⛺\n"
+            f"פרטי הכניסה לצימר מוכנים - הקוד הפותח את הדלת שלכם הוא {code}, "
+            f"בתוקף לכל משך השהות.\n"
+            f"בכל שאלה אנחנו כאן בשבילכם.\n"
+            f"נתראה בקרוב!\n"
             f"— Desert & Sea"
         ),
         "checkout": (
@@ -316,6 +329,27 @@ def _build_body(message_type: str, booking: Booking) -> str:
         ),
     }
     return templates.get(message_type, "")
+
+
+def _build_variables(message_type: str, booking: Booking) -> dict:
+    """
+    בונה את ה-content_variables ({{1}}, {{2}}, ...) לכל תבנית מאושרת,
+    בהתאמה מדויקת לסדר המשתנים שהוגדר בכל תבנית ב-Twilio Content
+    Template Builder (ראו app/integrations/whatsapp.py, CONTENT_SIDS).
+    """
+    name = (booking.guest_name or "").split()[0] if booking.guest_name else "אורח"
+    room = booking.room_name or ""
+    checkin_str = booking.check_in.strftime("%d/%m/%Y") if booking.check_in else ""
+    checkout_str = booking.check_out.strftime("%d/%m/%Y") if booking.check_out else ""
+    code = booking.entry_code or "יישלח בנפרד"
+
+    variables = {
+        "confirmation": {"1": name, "2": room, "3": checkin_str, "4": checkout_str},
+        "pre_arrival": {"1": name, "2": room, "3": checkin_str},
+        "entry_code": {"1": name, "2": code},
+        "checkout": {"1": name, "2": checkout_str},
+    }
+    return variables.get(message_type, {})
 
 
 # ---------------------------------------------------------------------------
@@ -358,9 +392,6 @@ async def _run_reconciliation():
             checkout_due_at = datetime.combine(booking.check_out, checkout_time) - timedelta(hours=2)
             recent_enough = booking.check_out >= (now.date() - timedelta(days=7))
             if now >= checkout_due_at and recent_enough:
-                await _send_scheduled(
-                    booking.id, "checkout", booking.guest_phone,
-                    _build_body("checkout", booking),
-                )
+                await _send_scheduled(booking.id, "checkout", booking.guest_phone)
         except Exception as e:
             logger.error(f"Reconcile: error processing booking {booking.id}: {e}")
