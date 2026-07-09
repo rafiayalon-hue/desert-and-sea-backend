@@ -162,7 +162,7 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         booking.status = _map_status(mh_status)
         booking.synced_at = datetime.utcnow()
 
-   await db.commit()
+    await db.commit()
     await db.refresh(booking)
 
     # הזמנה בוטלה — מבטלים jobs מתוזמנים שנרשמו לה (pre_arrival, checkout),
@@ -191,8 +191,8 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     notify_error = None
     if should_notify:
         try:
-           await trigger_confirmation(booking, db)
-           await schedule_booking_messages(booking, db)
+            await trigger_confirmation(booking, db)
+            await schedule_booking_messages(booking, db)
         except Exception as exc:  # noqa: BLE001 — deliberately broad, see comment above
             notify_error = str(exc)
 
