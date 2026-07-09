@@ -9,6 +9,7 @@ Content Templates שאושרו מראש ע"י Meta — טקסט חופשי (body
 """
 import json
 import logging
+import re
 
 from twilio.rest import Client
 from app.config import settings
@@ -16,6 +17,38 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 MAP_MEDIA_URL = "https://selfless-happiness-production.up.railway.app/static/map.jpeg"
+
+
+def _to_e164(phone: str) -> str:
+    """
+    ממיר מספר טלפון ישראלי מקומי (054-1234567 / 0541234567 / 054 123 4567)
+    לפורמט E.164 שTwilio דורש (+972541234567) — בלעדיו Twilio מחזיר
+    "Invalid 'To' Phone Number" (Error 21211) ולא שולח כלום.
+
+    אם המספר כבר בפורמט בינלאומי (+972... או 972...) — רק מנקה תווים
+    (מקפים/רווחים/סוגריים), לא נוגע במבנה. לא נועד לתמוך במדינות אחרות
+    מלבד ישראל (0XXXXXXXXX ← אורח ישראלי בהגדרה, זה המקור היחיד שראינו).
+    """
+    p = re.sub(r"[\s\-()]", "", phone or "").strip()
+    if p.startswith("+972"):
+        return p
+    if p.startswith("972"):
+        return "+" + p
+    if p.startswith("0"):
+        return "+972" + p[1:]
+    # פורמט לא מזוהה — לא מנחשים, נותנים ל-Twilio להחזיר שגיאה ברורה
+    # שתירשם ב-MessageLog כ-failed, כמו כל כשל שליחה אחר.
+    logger.warning(f"Phone number in unrecognized format, sending as-is: {phone!r}")
+    return p
+
+
+def _whatsapp_address(to_phone: str) -> str:
+    """בונה כתובת 'whatsapp:+972...' — מנרמל תמיד, גם אם כבר יש קידומת."""
+    if to_phone.startswith("whatsapp:"):
+        raw = to_phone[len("whatsapp:"):]
+        return f"whatsapp:{_to_e164(raw)}"
+    return f"whatsapp:{_to_e164(to_phone)}"
+
 
 # Twilio Content Template SIDs — נוצרו ואושרו ב-Content Template Builder
 # (Desert and Sea project, 9.7.2026). שינוי טקסט תבנית מאושרת מחייב תבנית
@@ -41,7 +74,7 @@ def send_whatsapp_template(to_phone: str, message_type: str, variables: dict) ->
         raise ValueError(f"No content template configured for message_type={message_type}")
 
     client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+    to = _whatsapp_address(to_phone)
     message = client.messages.create(
         from_=settings.twilio_whatsapp_from,
         to=to,
@@ -59,7 +92,7 @@ def send_whatsapp(to_phone: str, body: str) -> str:
     Returns the Twilio message SID.
     """
     client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+    to = _whatsapp_address(to_phone)
     message = client.messages.create(
         from_=settings.twilio_whatsapp_from,
         to=to,
@@ -77,7 +110,7 @@ def send_whatsapp_with_map(to_phone: str, body: str) -> str:
     Returns the Twilio message SID.
     """
     client = Client(settings.twilio_account_sid, settings.twilio_auth_token)
-    to = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+    to = _whatsapp_address(to_phone)
     message = client.messages.create(
         from_=settings.twilio_whatsapp_from,
         to=to,
