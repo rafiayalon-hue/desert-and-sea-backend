@@ -349,8 +349,19 @@ async def update_booking(
                         f"[GUEST_LOOKUP] Phone {new_phone} found under multiple names: {names}"
                     )
 
-    await db.commit()
+   await db.commit()
     await db.refresh(booking)
+
+    # אם שינית שעת כניסה/יציאה ידנית ולהזמנה הזו כבר יש קוד כניסה בפועל —
+    # מעדכנים גם את חלון התוקף האמיתי במנעול, לא רק את מה שמוצג בדשבורד.
+    times_changed = (
+        (data.checkin_time is not None and data.checkin_time != old_checkin_time)
+        or (data.checkout_time is not None and data.checkout_time != old_checkout_time)
+    )
+    ttlock_window_updated = False
+    if times_changed and booking.entry_code:
+        from app.integrations.ttlock import update_passcode_window
+        ttlock_window_updated = await update_passcode_window(booking, db)
 
     phone_just_added = (not had_phone) and bool(booking.guest_phone)
     if phone_just_added:
@@ -361,4 +372,5 @@ async def update_booking(
         **booking.__dict__,
         "automation_triggered": phone_just_added,
         "is_returning_guest": is_returning,
+        "ttlock_window_updated": ttlock_window_updated,
     }
