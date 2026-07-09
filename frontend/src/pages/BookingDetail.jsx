@@ -192,8 +192,9 @@ export default function BookingDetail({ bookingId, navigate }) {
     setCreatingCode(true);
     setCodeError(null);
     try {
+      const codeToUse = (manualCode || booking.proposed_entry_code || "").trim();
       const params = new URLSearchParams();
-      if (manualCode.trim()) params.set("passcode", manualCode.trim());
+      if (codeToUse) params.set("passcode", codeToUse);
       const qs = params.toString();
       const res = await fetch(
         `${API_BASE}/locks/bookings/${booking.id}/assign-code${qs ? `?${qs}` : ""}`,
