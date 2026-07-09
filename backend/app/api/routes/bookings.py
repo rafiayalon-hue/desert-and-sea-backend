@@ -287,11 +287,13 @@ async def update_booking(
 ):
     from app.scheduler import schedule_booking_messages, trigger_confirmation
 
-  booking = await db.get(Booking, booking_id)
+    booking = await db.get(Booking, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
 
     had_phone = bool(booking.guest_phone)
+    old_checkin_time = booking.checkin_time
+    old_checkout_time = booking.checkout_time
 
     if data.notes is not None:
         booking.notes = data.notes
@@ -349,7 +351,7 @@ async def update_booking(
                         f"[GUEST_LOOKUP] Phone {new_phone} found under multiple names: {names}"
                     )
 
-   await db.commit()
+    await db.commit()
     await db.refresh(booking)
 
     # אם שינית שעת כניסה/יציאה ידנית ולהזמנה הזו כבר יש קוד כניסה בפועל —
