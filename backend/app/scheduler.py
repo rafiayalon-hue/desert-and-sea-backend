@@ -322,4 +322,45 @@ def _build_body(message_type: str, booking: Booking) -> str:
 # Reconciliation — safety net for the deploy-wipes-memory problem
 # ---------------------------------------------------------------------------
 
-@scheduler.scheduled_job("interval",
+@scheduler.scheduled_job("interval", minutes=30, id="reconcile_pending_jobs")
+async def reconcile_pending_jobs():
+    await _run_reconciliation()
+
+
+async def run_reconciliation_now():
+    """נקרא פעם אחת מ-main.py מיד אחרי scheduler.start()."""
+    await _run_reconciliation()
+
+
+async def _run_reconciliation():
+    now = datetime.now()
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Booking))
+        bookings = result.scalars().all()
+
+    for booking in bookings:
+        if (booking.status or "").strip().lower() == "cancelled":
+            continue
+        if not booking.guest_phone or not booking.check_in or not booking.check_out:
+            continue
+
+        try:
+            # --- קוד כניסה: רשת ביטחון — אם עדיין חסר, וההזמנה עדיין
+            #     בתוך חלון השהייה (לא נגמרה), ננסה ליצור+לשלוח שוב.
+            #     אין יותר "המתנה ליומיים לפני" — היצירה מיידית, אז אם
+            #     חסר כאן זה סימן שהניסיון המיידי המקורי נכשל/אבד.
+            if not booking.entry_code and now.date() <= booking.check_out:
+                await create_and_send_entry_code(booking.id)
+
+            # --- יציאה: הגיע הזמן — מוחק קוד (אם קיים) ושולח הודעת יציאה ---
+            checkout_time = _parse_time(booking.checkout_time) if booking.checkout_time else _checkout_time(booking.check_in)
+            checkout_due_at = datetime.combine(booking.check_out, checkout_time) - timedelta(hours=2)
+            recent_enough = booking.check_out >= (now.date() - timedelta(days=7))
+            if now >= checkout_due_at and recent_enough:
+                await _send_scheduled(
+                    booking.id, "checkout", booking.guest_phone,
+                    _build_body("checkout", booking),
+                )
+        except Exception as e:
+            logger.error(f"Reconcile: error processing booking {booking.id}: {e}")
