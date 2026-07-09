@@ -9,7 +9,7 @@ import os
 from app.api.routes import bookings, guests, locks, messages, settings
 from app.api.routes import guests_merge
 from app.api.routes import webhook          # NEW
-from app.routers import public_checkin      # NEW — עמוד קוד כניסה באתר הציבורי
+from app.api.routes import public_checkin   # NEW — עמוד קוד כניסה באתר הציבורי
 from app.database import engine, Base
 from app.scheduler import scheduler, run_reconciliation_now         # NEW
 
