@@ -287,7 +287,7 @@ async def update_booking(
 ):
     from app.scheduler import schedule_booking_messages, trigger_confirmation
 
-    booking = await db.get(Booking, booking_id)
+  booking = await db.get(Booking, booking_id)
     if not booking:
         raise HTTPException(status_code=404, detail="הזמנה לא נמצאה")
 
