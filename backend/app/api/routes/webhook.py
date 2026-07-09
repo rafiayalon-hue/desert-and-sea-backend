@@ -162,19 +162,21 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         booking.status = _map_status(mh_status)
         booking.synced_at = datetime.utcnow()
 
-    await db.commit()
+   await db.commit()
     await db.refresh(booking)
 
-    # הזמנה בוטלה — מבטלים כל job מתוזמן שנרשם לה קודם (pre_arrival,
-    # entry_code, checkout). לא סומכים רק על זה (ה-job היה נמחק ממילא
-    # בדיפלוי הבא כי אין persistence — לכן יש גם הגנה בזמן-ריצה ב-
-    # assign_passcode_to_booking), אבל זה מונע שליחה מיותרת אם אין
-    # דיפלוי בין הביטול לבין מועד ה-job.
+    # הזמנה בוטלה — מבטלים jobs מתוזמנים שנרשמו לה (pre_arrival, checkout),
+    # וגם — אם כבר נוצר קוד כניסה בפועל על המנעול (עכשיו נוצר מיד עם
+    # ההזמנה, אז יש סיכוי טוב שכבר קיים) — מוחקים אותו פיזית מהמנעול.
+    # בלי זה, אורח שההזמנה שלו בוטלה עדיין מחזיק קוד תקף לדלת.
     if mh_status == "CL":
         cancel_scheduled_jobs(booking.id)
+        if booking.entry_code:
+            from app.integrations.ttlock import remove_passcode_after_checkout
+            await remove_passcode_after_checkout(booking, db)
 
     # New confirmed booking with a phone number → send confirmation now,
-    # schedule the rest of the automated messages.
+    # create the entry code, schedule the rest of the automated messages.
     #
     # IMPORTANT: this must never raise. The booking is already committed
     # above — a downstream failure here (e.g. Twilio rejecting a bad
@@ -189,8 +191,8 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     notify_error = None
     if should_notify:
         try:
-            await trigger_confirmation(booking, db)
-            schedule_booking_messages(booking)
+           await trigger_confirmation(booking, db)
+           await schedule_booking_messages(booking, db)
         except Exception as exc:  # noqa: BLE001 — deliberately broad, see comment above
             notify_error = str(exc)
 
