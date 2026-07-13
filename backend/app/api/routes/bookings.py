@@ -9,7 +9,15 @@ import calendar
 
 router = APIRouter()
 
-ACTIVE_STATUSES = {"confirmed", "channel manager", "homepage"}
+# NEW (12.7.26): הוספו checked_in / checked_out — ה-webhook החדש ממיניהוטל
+# מעדכן הזמנות לסטטוסים האלה כשאורח נכנס/יוצא בפועל. בלי השורה הזו, ברגע
+# שה-webhook יתחיל לרוץ, לילות של הזמנות שכבר "נכנסו" ייעלמו בשקט מדוח
+# התפוסה (כי הסטטוס כבר לא היה ברשימה הנספרת). ראו אימות ידני מול הנתונים
+# האמיתיים של יולי 2026 — התאמה מלאה לפני התיקון, זה סיכון לעתיד, לא באג קיים.
+ACTIVE_STATUSES = {
+    "confirmed", "channel manager", "homepage",
+    "checked_in", "checked_out",
+}
 
 
 @router.get("/")
