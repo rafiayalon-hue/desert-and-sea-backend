@@ -19,7 +19,8 @@ Credentials are configured via settings.minihotel_webhook_user /
 settings.minihotel_webhook_password and given to MiniHotel out-of-band.
 """
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -34,6 +35,14 @@ from app.scheduler import trigger_confirmation, schedule_booking_messages, cance
 
 router = APIRouter()
 security = HTTPBasic()
+
+# NEW (15.7.26): מיניהוטל שולח checkInDate/checkOutDate כחותמות ISO ב-UTC.
+# בלי המרה מפורשת, לקיחת ה-date() הגולמי גורמת ל"נפילה" של יום אחד אחורה
+# בכל פעם שהשעה המקומית בישראל היא כבר היום הבא אבל ה-UTC עדיין ביום
+# הקודם (למשל חצות ישראל = 21:00 UTC של אתמול). זו הסיבה שהזמנה עם
+# checkOutDate של 18/7 (זמן ישראל) הופיעה במערכת כ-17/7 — התגלה בבדיקה
+# מול הזמנה 007000466 (מיכל שפירא), 15.7.26.
+IL_TZ = ZoneInfo("Asia/Jerusalem")
 
 
 # ---------------------------------------------------------------------------
@@ -292,11 +301,29 @@ def _normalise_room(room_number: str | None, room_type: str | None = None) -> st
 
 
 def _parse_date(val: str | None):
+    """
+    ממיר את מחרוזת התאריך שמגיעה ממיניהוטל לתאריך (date).
+
+    NEW (15.7.26): פורמטים עם שעה (ISO) מטופלים כ-UTC ומומרים לזמן ישראל
+    לפני חילוץ ה-date — אחרת חצות ישראל (שכבר "יום הבא" בישראל) עדיין
+    נראה כמו "היום הקודם" ב-UTC, וגורם לתאריך שגוי ביום אחד. פורמטים של
+    תאריך-בלבד (בלי שעה) אין מה להמיר — הם כבר יום קלנדרי מלא, לא רגע
+    בזמן, אז נשארים כמו שהם.
+    """
     if not val:
         return None
-    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d", "%d/%m/%Y"):
+
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            dt_utc = datetime.strptime(val, fmt).replace(tzinfo=timezone.utc)
+            return dt_utc.astimezone(IL_TZ).date()
+        except (ValueError, TypeError):
+            continue
+
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
         try:
             return datetime.strptime(val, fmt).date()
         except (ValueError, TypeError):
             continue
+
     return None
