@@ -17,6 +17,7 @@ import random
 import re
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -25,6 +26,14 @@ from app.config import settings
 # TTLock EU endpoints
 AUTH_URL = "https://euapi.ttlock.com/oauth2/token"
 BASE_URL = "https://euapi.ttlock.com/v3"
+
+# NEW (15.7.26): כל שעות הכניסה/יציאה הן זמן ישראל — לא זמן השרת (Railway
+# רץ ב-UTC). בלי לקבוע tzinfo במפורש, datetime.timestamp() על אובייקט
+# "תמים" (naive) מניח בטעות שהשעה היא לפי אזור הזמן של השרת, מה שיצר
+# הפרש קבוע של 3 שעות בין מה שהוזן בדשבורד למה שבאמת נכתב במנעול
+# (התגלה בבדיקת הזמנה BK446: 12:30/16:00 בדשבורד → 15:30/19:00 בפועל
+# במנעול — הפרש קבוע ועקבי בשני הכיוונים, בדיוק UTC מול Asia/Jerusalem).
+IL_TZ = ZoneInfo("Asia/Jerusalem")
 
 # Passcode type: 1=one-time, 2=permanent, 3=period(timed), 4=erase
 PASSCODE_TYPE_PERIOD = 3
@@ -250,6 +259,19 @@ def _parse_hhmm(value: str | None, default_hour: int, default_minute: int = 0) -
         return default_hour, default_minute
 
 
+def _to_il_ms(check_date, hour: int, minute: int) -> int:
+    """
+    ממיר תאריך + שעה (שהיא תמיד זמן ישראל, לפי איך שהמשתמשים מזינים אותה
+    בדשבורד) ל-Unix timestamp במילישניות, עם אזור הזמן הנכון קבוע במפורש.
+    זה המקום היחיד שממיר תאריך/שעה ל-ms בקובץ הזה — כל קריאה אחרת עוברת
+    כאן, כדי שלא יהיה עוד מקום ששוכח לקבוע tzinfo.
+    """
+    dt = datetime.combine(check_date, datetime.min.time()).replace(
+        hour=hour, minute=minute, tzinfo=IL_TZ
+    )
+    return int(dt.timestamp() * 1000)
+
+
 async def get_lock_status(lock_id: int) -> dict:
     """
     סטטוס מנעול בודד — סוללה, חיבור וכו'.
@@ -302,12 +324,15 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
     checkin_hour, checkin_minute = _parse_hhmm(getattr(booking, "checkin_time", None), 14, 0)
     checkout_hour, checkout_minute = _parse_hhmm(getattr(booking, "checkout_time", None), 12, 0)
 
-    start_dt = datetime.combine(booking.check_in, datetime.min.time()).replace(hour=checkin_hour, minute=checkin_minute)
-    end_dt = datetime.combine(booking.check_out, datetime.min.time()).replace(hour=checkout_hour, minute=checkout_minute)
-    start_ms = int(start_dt.timestamp() * 1000)
-    end_ms = int(end_dt.timestamp() * 1000)
+    # NEW (15.7.26): קבוע Asia/Jerusalem במפורש — ראו IL_TZ / _to_il_ms
+    # למעלה. זה מה שהיה חסר וגרם להפרש של 3 שעות בין מה שהוזן בדשבורד
+    # למה שבאמת נכתב במנעול.
+    start_ms = _to_il_ms(booking.check_in, checkin_hour, checkin_minute)
+    end_ms = _to_il_ms(booking.check_out, checkout_hour, checkout_minute)
 
-    passcode_name = f"BK{booking.id}"
+    # NEW (15.7.26): שם האורח מוצג באפליקציית TTLock ("שם" ליד הקוד)
+    # במקום המזהה הפנימי BK{id} — קריא בשטח למי שמסתכל באפליקציה.
+    passcode_name = (booking.guest_name or f"BK{booking.id}").strip()
 
     created_pwd_ids: list[str] = []
     try:
@@ -345,9 +370,9 @@ async def update_passcode_window(booking, db) -> bool:
     """
     מעדכן את חלון התוקף **בפועל במנעול** לפי checkin_time/checkout_time
     העדכניים של ההזמנה — נקרא מ-bookings.py כשמתקנים שעות ידנית אחרי
-    שקוד כבר נוצר (למשל יציאה מאוחרת בסופ"ע). בלי זה, תיקון ידני
+    שקוד כבר נוצר (למשל יציאה מאוחרת בסופ"ש). בלי זה, תיקון ידני
     בדשבורד היה משנה רק את מה שמוצג במסך, לא את מה שה-TTLock אוכף בפועל
-    בשטח — האורח היה ננעול בחוץ/פנימה לפי החלון הישן.
+    בשטח — האורח היה ננעל בחוץ/פנימה לפי החלון הישן.
 
     משתמש ב-change_passcode (היה קיים ב-client אבל אף אחד לא קרא לו).
     פועל על כל המנעולים ב-ttlock_pwd_ids (גם עבור des_sea — שני המנעולים).
@@ -358,10 +383,11 @@ async def update_passcode_window(booking, db) -> bool:
 
     checkin_hour, checkin_minute = _parse_hhmm(getattr(booking, "checkin_time", None), 14, 0)
     checkout_hour, checkout_minute = _parse_hhmm(getattr(booking, "checkout_time", None), 12, 0)
-    start_dt = datetime.combine(booking.check_in, datetime.min.time()).replace(hour=checkin_hour, minute=checkin_minute)
-    end_dt = datetime.combine(booking.check_out, datetime.min.time()).replace(hour=checkout_hour, minute=checkout_minute)
-    start_ms = int(start_dt.timestamp() * 1000)
-    end_ms = int(end_dt.timestamp() * 1000)
+
+    # NEW (15.7.26): אותו תיקון אזור זמן כמו ב-assign_passcode_to_booking —
+    # ראו IL_TZ / _to_il_ms למעלה.
+    start_ms = _to_il_ms(booking.check_in, checkin_hour, checkin_minute)
+    end_ms = _to_il_ms(booking.check_out, checkout_hour, checkout_minute)
 
     updated_any = False
     for entry in booking.ttlock_pwd_ids.split(","):
@@ -391,7 +417,10 @@ async def remove_passcode_after_checkout(booking, db) -> bool:
     נמצא קוד בפועל (למקרה שכבר נמחק, או שמעולם לא נוצר).
     מחזיר True אם נמצא ונמחק קוד בפועל, False אם לא היה קוד להזמנה הזו.
     """
-    passcode_name = f"BK{booking.id}"
+    # NEW (15.7.26): שם האורח הוא הזיהוי העיקרי כעת — 'BK{id}' עדיין
+    # נבדק כ-fallback לקודים ישנים שנוצרו לפני שינוי הכינוי.
+    passcode_name = (booking.guest_name or "").strip()
+    legacy_name = f"BK{booking.id}"
     deleted_any = False
 
     if booking.ttlock_pwd_ids:
@@ -412,7 +441,10 @@ async def remove_passcode_after_checkout(booking, db) -> bool:
             lock_ids = []
         for lock_id in lock_ids:
             passcodes = await ttlock_client.list_passcodes(lock_id)
-            target = next((p for p in passcodes if p.get("keyboardPwdName") == passcode_name), None)
+            target = next(
+                (p for p in passcodes if p.get("keyboardPwdName") in (passcode_name, legacy_name)),
+                None,
+            )
             if target:
                 await ttlock_client.delete_passcode(lock_id, target["keyboardPwdId"])
                 deleted_any = True
