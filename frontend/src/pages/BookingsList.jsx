@@ -1,8 +1,43 @@
 import { useState } from "react";
 import { useBookings } from "../hooks/useBookings";
+import { API_BASE } from "../hooks/useGuests";
 
 function useIsMobile() {
   return window.innerWidth <= 768;
+}
+
+// NEW (16.7.26): מחיקת הזמנה בלתי הפיכה — דורשת אישור מפורש, ועוצרת את
+// אירוע הלחיצה על השורה (stopPropagation) כדי לא לפתוח בטעות את פרטי
+// ההזמנה כשלוחצים על הפח. אחרי מחיקה — רענון מלא של הדף, כי useBookings
+// (בניגוד ל-useGuests) עוד לא תומך ברענון חלקי.
+async function deleteBooking(e, bookingId) {
+  e.stopPropagation();
+  if (!window.confirm("למחוק את ההזמנה הזו לצמיתות? אי אפשר לבטל פעולה זו.")) {
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/bookings/${bookingId}`, { method: "DELETE" });
+    if (!res.ok) throw new Error(`status ${res.status}`);
+    window.location.reload();
+  } catch (err) {
+    console.error("[BookingsList] delete booking failed:", err);
+    alert("מחיקת ההזמנה נכשלה — נסה שוב");
+  }
+}
+
+function DeleteButton({ bookingId }) {
+  return (
+    <button
+      title="מחיקת הזמנה"
+      onClick={e => deleteBooking(e, bookingId)}
+      style={{
+        background: "none", border: "none", cursor: "pointer",
+        color: "var(--text-muted)", fontSize: "1rem", padding: 4, lineHeight: 1,
+      }}
+    >
+      🗑️
+    </button>
+  );
 }
 
 export default function BookingsList({ navigate }) {
@@ -67,6 +102,7 @@ export default function BookingsList({ navigate }) {
           <div>חדר</div>
           <div>מקור</div>
           <div>סטטוס</div>
+          <div></div>
         </div>
 
         {loading && (
@@ -85,7 +121,10 @@ export default function BookingsList({ navigate }) {
               className={`table-row ${b.status === "cancelled" ? "cancelled" : ""}`}
               onClick={() => navigate("booking", b.id)}
             >
-              <div className="table-row-name">{b.full_name}</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                <div className="table-row-name">{b.full_name}</div>
+                <DeleteButton bookingId={b.id} />
+              </div>
               <div className="table-row-meta">
                 <span>📅 {b.checkin_label} → {b.checkout_label}</span>
                 <span>· {b.nights} לילות</span>
@@ -124,6 +163,7 @@ export default function BookingsList({ navigate }) {
               <div><span className={`room-tag ${b.room_color}`}>{b.room_display}</span></div>
               <div className="source-badge">{b.source_label}</div>
               <div><span className={`status-badge ${b.status}`}>{b.status_label}</span></div>
+              <div><DeleteButton bookingId={b.id} /></div>
             </div>
           )
         ))}
