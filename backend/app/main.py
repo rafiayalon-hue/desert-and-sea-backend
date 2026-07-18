@@ -75,6 +75,13 @@ async def lifespan(app: FastAPI):
             "ON checkin_tokens (token)"
         ))
 
+        # NEW (16.7.26): פרטי חשבון בנק — כדי שאבישג תוכל לגשת ולשלוח
+        # לאורחים שמבקשים לשלם בהעברה בנקאית, בלי לחפש אצל רפי כל פעם.
+        await conn.execute(text("ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS bank_name VARCHAR(200)"))
+        await conn.execute(text("ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS bank_branch VARCHAR(200)"))
+        await conn.execute(text("ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS bank_account_number VARCHAR(50)"))
+        await conn.execute(text("ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS bank_account_holder VARCHAR(200)"))
+
     # Start APScheduler
     scheduler.start()
 
@@ -104,8 +111,8 @@ app.add_middleware(
         "https://desert-and-sea.vercel.app",
         "https://*.vercel.app",
         "https://desert-and-sea-production.up.railway.app",
-        "https://desertandsea.co.il",          # NEW — האתר הציבורי (וורדפרס) קורא ל-/public/entry-code משם
-        "https://www.desertandsea.co.il",       # NEW — ודא שזה הדומיין האמיתי, תחליף אם שונה
+        "https://desert-sea.co.il",             # NEW — האתר הציבורי (וורדפרס) קורא ל-/public/entry-code משם
+        "https://www.desert-sea.co.il",          # NEW — הדומיין האמיתי (עם מקף)
     ],
     allow_credentials=True,
     allow_methods=["*"],
