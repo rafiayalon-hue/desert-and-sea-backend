@@ -133,6 +133,14 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     if total_price is None:
         total_price = total.get("amountAfterTaxes")
 
+    # NEW (16.7.26): מיניהוטל הוא מנוע ההזמנות, לא מקור הזמנה — כשה-payload
+    # לא כולל שדה source בכלל, המשמעות היא שההזמנה הוזנה ידנית ישירות
+    # במנוע ההזמנות שלהם (לא הגיעה מ-Airbnb/אתר/ערוץ חיצוני), כלומר היא
+    # בעצם "direct" לכל דבר. גם מנרמלים רישיות (למשל "AIRBNB" → "airbnb")
+    # כדי שאותו מקור לא יתפצל לשתי קטגוריות שונות בדוחות.
+    raw_source = (payload.get("source") or "").strip()
+    source = raw_source.lower() if raw_source else "direct"
+
     result = await db.execute(select(Booking).where(Booking.minihotel_id == res_number))
     booking = result.scalar_one_or_none()
     is_brand_new = booking is None
@@ -148,7 +156,7 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
             check_out=check_out or datetime.utcnow().date(),
             total_price=total_price or 0,
             status=_map_status(mh_status),
-            source=payload.get("source") or "minihotel",
+            source=source,
             synced_at=datetime.utcnow(),
         )
         db.add(booking)
