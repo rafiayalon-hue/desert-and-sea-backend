@@ -66,11 +66,6 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE message_logs ADD COLUMN IF NOT EXISTS direction VARCHAR(10) DEFAULT 'outbound'"
         ))
         await conn.execute(text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS uq_message_logs_booking_type_outbound "
-            "ON message_logs (booking_id, message_type) "
-            "WHERE booking_id IS NOT NULL AND direction = 'outbound'"
-        ))
-        await conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_message_logs_phone ON message_logs (phone)"
         ))
 
