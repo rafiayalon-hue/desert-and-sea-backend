@@ -322,12 +322,30 @@ def _checkout_time(checkout: date) -> time:
     return time(14, 0) if checkout.isoweekday() == 6 else time(12, 0)
 
 
+def _display_room_name(raw_room_name: str) -> str:
+    """
+    NEW (17.7.26): שם החדר כפי שמוצג לאורח בהודעות בפועל — לא הערך הגולמי
+    מה-DB, שיכול להכיל "Sesert" (שגיאת כתיב היסטורית ממיניהוטל/יבוא ישן,
+    ראו גם _resolve_lock_ids ב-ttlock.py ו-_normalise_room ב-webhook.py)
+    או שמות אנגליים גולמיים כמו "Sea"/"Desert"/"Des_Sea". בלעדיה, אורח
+    היה מקבל הודעה עם "הזמנתך ל-Sesert אושרה" — בדיוק הבאג שדווח.
+    """
+    normalised = (raw_room_name or "").strip().lower().replace(" ", "")
+    if "des_sea" in normalised:
+        return "מדבר וים"
+    if "sesert" in normalised or "desert" in normalised or "מדבר" in (raw_room_name or ""):
+        return "מדבר"
+    if "sea" in normalised or "ים" in (raw_room_name or ""):
+        return "ים"
+    return raw_room_name or ""
+
+
 def _build_body(message_type: str, booking: Booking) -> str:
     """טקסט קריא בעברית, נשמר ב-MessageLog לצורך תיעוד/הצגה בדשבורד בלבד
     — זה לא מה שנשלח בפועל לאורח (ראו _send_if_not_sent). כאן עדיין מציגים
     את הקוד עצמו — זה תיעוד פנימי לדשבורד, לא הודעת WhatsApp."""
     name = (booking.guest_name or "").split()[0] if booking.guest_name else "אורח"
-    room = booking.room_name or ""
+    room = _display_room_name(booking.room_name)
     checkin_str = booking.check_in.strftime("%d/%m/%Y") if booking.check_in else ""
     checkout_str = booking.check_out.strftime("%d/%m/%Y") if booking.check_out else ""
     code = booking.entry_code or "יישלח בנפרד"
@@ -374,7 +392,7 @@ async def _build_variables(message_type: str, booking: Booking, db: AsyncSession
     לא הקוד עצמו — ראו הערת 9.7.26 #2 בראש הקובץ.
     """
     name = (booking.guest_name or "").split()[0] if booking.guest_name else "אורח"
-    room = booking.room_name or ""
+    room = _display_room_name(booking.room_name)
     checkin_str = booking.check_in.strftime("%d/%m/%Y") if booking.check_in else ""
     checkout_str = booking.check_out.strftime("%d/%m/%Y") if booking.check_out else ""
 
