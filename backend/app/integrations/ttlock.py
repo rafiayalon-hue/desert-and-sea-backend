@@ -334,29 +334,45 @@ async def assign_passcode_to_booking(booking, db, passcode: str | None = None) -
     # במקום המזהה הפנימי BK{id} — קריא בשטח למי שמסתכל באפליקציה.
     passcode_name = (booking.guest_name or f"BK{booking.id}").strip()
 
+    # NEW (28.7.26): אם הקוד (בד"כ 4 ספרות אחרונות של הטלפון) כבר קיים
+    # כפעיל על אותו מנעול — למשל מהזמנה קודמת/חופפת של אותו אורח שעדיין
+    # לא נמחקה — TTLock דוחה עם errcode -3007 ("same passcode already
+    # exists"). זה לא היה מטופל בכלל, וגרם לכישלון שקט של יצירת הקוד
+    # (התגלה בהזמנה 472, אולגה דרור). התיקון: בהתנגשות כזו, מגרילים קוד
+    # אקראי חדש ומנסים שוב, עד כמה פעמים.
+    MAX_PASSCODE_ATTEMPTS = 5
     created_pwd_ids: list[str] = []
-    try:
-        for lock_id in lock_ids:
-            result = await ttlock_client.add_passcode(
-                lock_id=lock_id,
-                passcode=passcode,
-                passcode_name=passcode_name,
-                start_date=start_ms,
-                end_date=end_ms,
-            )
-            pwd_id = result.get("keyboardPwdId")
-            if pwd_id is not None:
-                created_pwd_ids.append(f"{lock_id}:{pwd_id}")
-    except Exception:
-        # נכשל באמצע (למשל על המנעול השני) — מנקים את מה שכבר נוצר
-        # כדי לא להשאיר קוד יתום שפותח רק דלת אחת מתוך שתיים.
-        for entry in created_pwd_ids:
-            lid_str, pwd_id_str = entry.split(":")
-            try:
-                await ttlock_client.delete_passcode(int(lid_str), int(pwd_id_str))
-            except Exception:
-                pass  # best-effort cleanup; השגיאה המקורית חשובה יותר
-        raise
+
+    for attempt in range(1, MAX_PASSCODE_ATTEMPTS + 1):
+        created_pwd_ids = []
+        try:
+            for lock_id in lock_ids:
+                result = await ttlock_client.add_passcode(
+                    lock_id=lock_id,
+                    passcode=passcode,
+                    passcode_name=passcode_name,
+                    start_date=start_ms,
+                    end_date=end_ms,
+                )
+                pwd_id = result.get("keyboardPwdId")
+                if pwd_id is not None:
+                    created_pwd_ids.append(f"{lock_id}:{pwd_id}")
+            break  # הצליח על כל המנעולים — יוצאים מלולאת הניסיונות
+        except Exception as e:
+            # נכשל באמצע (למשל על המנעול השני) — מנקים את מה שכבר נוצר
+            # כדי לא להשאיר קוד יתום שפותח רק דלת אחת מתוך שתיים.
+            for entry in created_pwd_ids:
+                lid_str, pwd_id_str = entry.split(":")
+                try:
+                    await ttlock_client.delete_passcode(int(lid_str), int(pwd_id_str))
+                except Exception:
+                    pass  # best-effort cleanup; השגיאה המקורית חשובה יותר
+
+            is_collision = isinstance(e, TTLockError) and e.errcode == -3007
+            if is_collision and attempt < MAX_PASSCODE_ATTEMPTS:
+                passcode = str(random.randint(1000, 9999))
+                continue
+            raise
 
     booking.entry_code = passcode
     booking.ttlock_pwd_ids = ",".join(created_pwd_ids)
