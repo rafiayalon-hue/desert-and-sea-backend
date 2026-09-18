@@ -129,6 +129,13 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     check_in = _parse_date(header.get("checkInDate"))
     check_out = _parse_date(header.get("checkOutDate"))
 
+    # NEW: guest counts. MiniHotel's exact field name isn't yet confirmed,
+    # so _extract_guests tries the common variants across header/payload/room
+    # and nested occupancy. Returns (None, None) when nothing is found, so
+    # we leave the column at its default/existing value rather than zeroing
+    # it. The raw header is echoed in the response below for calibration.
+    adults, children = _extract_guests(header, payload, first_room)
+
     total_price = total.get("amount")
     if total_price is None:
         total_price = total.get("amountAfterTaxes")
@@ -155,6 +162,8 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
             check_in=check_in or datetime.utcnow().date(),
             check_out=check_out or datetime.utcnow().date(),
             total_price=total_price or 0,
+            adults=adults if adults is not None else 1,
+            children=children if children is not None else 0,
             status=_map_status(mh_status),
             source=source,
             synced_at=datetime.utcnow(),
@@ -176,6 +185,10 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
             booking.check_out = check_out
         if total_price is not None:
             booking.total_price = total_price
+        if adults is not None:
+            booking.adults = adults
+        if children is not None:
+            booking.children = children
         booking.status = _map_status(mh_status)
         booking.synced_at = datetime.utcnow()
 
@@ -222,10 +235,15 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         "guest_name": booking.guest_name,
         "room": booking.room_name,
         "booking_status": booking.status,
+        "adults": booking.adults,
+        "children": booking.children,
         "messages_scheduled": should_notify and notify_error is None,
         "notify_error": notify_error,
         # visible for calibrating _normalise_room against real MiniHotel data
         "raw_room": {"roomNumber": first_room.get("roomNumber"), "roomType": first_room.get("roomType")},
+        # NEW: echo the raw header so we can confirm the exact guest-count
+        # field name MiniHotel uses (remove once confirmed).
+        "raw_header_keys": sorted(header.keys()),
     }
 
 
@@ -272,6 +290,46 @@ async def _handle_occupancy_event(body: MiniHotelWebhook, db: AsyncSession):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _extract_guests(header: dict, payload: dict, room: dict) -> tuple[int | None, int | None]:
+    """
+    Pull adult/child counts out of a MiniHotel reservation payload.
+
+    MiniHotel's exact field name isn't documented for us yet, so we try the
+    common PMS variants across the header, the payload root, the room entry,
+    and a nested `occupancy` object — returning the first place that has any
+    of them. Returns (None, None) when nothing is found, so the caller can
+    keep the existing/default value instead of zeroing real data.
+    """
+    adult_keys = ["adults", "numAdults", "adultCount", "adult", "adultsCount", "numberOfAdults"]
+    child_keys = ["children", "numChildren", "childCount", "child", "childrenCount", "kids", "numberOfChildren"]
+
+    def _find(d: dict, keys: list[str]):
+        for k in keys:
+            if isinstance(d, dict) and k in d and d[k] is not None:
+                try:
+                    return int(d[k])
+                except (ValueError, TypeError):
+                    pass
+        return None
+
+    sources = [
+        header,
+        payload,
+        room,
+        header.get("occupancy") if isinstance(header, dict) else None,
+        payload.get("occupancy") if isinstance(payload, dict) else None,
+        room.get("occupancy") if isinstance(room, dict) else None,
+    ]
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        a = _find(src, adult_keys)
+        c = _find(src, child_keys)
+        if a is not None or c is not None:
+            return a, c
+    return None, None
+
 
 def _map_status(mh_status: str) -> str:
     mapping = {
