@@ -18,6 +18,7 @@ Authentication: HTTP Basic Auth (required by MiniHotel's webhook spec).
 Credentials are configured via settings.minihotel_webhook_user /
 settings.minihotel_webhook_password and given to MiniHotel out-of-band.
 """
+import logging
 import secrets
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -35,6 +36,7 @@ from app.scheduler import trigger_confirmation, schedule_booking_messages, cance
 
 router = APIRouter()
 security = HTTPBasic()
+logger = logging.getLogger(__name__)
 
 # NEW (15.7.26): מיניהוטל שולח checkInDate/checkOutDate כחותמות ISO ב-UTC.
 # בלי המרה מפורשת, לקיחת ה-date() הגולמי גורמת ל"נפילה" של יום אחד אחורה
@@ -135,6 +137,14 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     # we leave the column at its default/existing value rather than zeroing
     # it. The raw header is echoed in the response below for calibration.
     adults, children = _extract_guests(header, payload, first_room)
+
+    # TEMP DEBUG — dump the raw guest-count context so we can see exactly
+    # which MiniHotel field holds adults/children/infants (remove once mapped).
+    logger.info(
+        "[GUESTS_DEBUG] extracted=(%s,%s) | header_keys=%s | header=%s | "
+        "first_room=%s | payload_keys=%s",
+        adults, children, sorted(header.keys()), header, first_room, sorted(payload.keys()),
+    )
 
     total_price = total.get("amount")
     if total_price is None:
