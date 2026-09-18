@@ -88,6 +88,12 @@ async def minihotel_webhook(
 ):
     ntype = body.notificationType or ""
 
+    # TEMP DEBUG — see exactly what MiniHotel sends on every webhook hit.
+    logger.info(
+        "[WEBHOOK_DEBUG] notificationType=%r | payload_keys=%s | full_payload=%s",
+        ntype, sorted((body.payload or {}).keys()), body.payload,
+    )
+
     if ntype.startswith("reservation."):
         return await _handle_reservation_event(body, db)
     elif ntype == "room.occupancy.updated":
