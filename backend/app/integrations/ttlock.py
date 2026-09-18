@@ -257,3 +257,56 @@ async def remove_passcode_after_checkout(booking, db: AsyncSession) -> bool:
     db.add(booking)
     await db.commit()
     return ok
+
+
+async def update_passcode_window(booking, db: AsyncSession) -> bool:
+    """
+    Update the validity window (start/end) of a booking's existing passcode(s)
+    on the lock(s), after check-in/checkout times were edited. Uses the same
+    period the booking now implies: check_in 14:00 → check_out 12:00, unless
+    booking.checkin_time / checkout_time override the hour. No-op (returns
+    False) if the booking has no passcode yet.
+    """
+    from datetime import datetime, time
+
+    if not booking.ttlock_pwd_ids:
+        return False
+
+    def _hhmm(val, default_h, default_m):
+        try:
+            h, m = str(val).strip().split(":")
+            return time(int(h), int(m))
+        except Exception:
+            return time(default_h, default_m)
+
+    ci_time = _hhmm(getattr(booking, "checkin_time", None), 14, 0)
+    co_time = _hhmm(getattr(booking, "checkout_time", None), 12, 0)
+    start_ms = int(datetime.combine(booking.check_in, ci_time).timestamp() * 1000)
+    end_ms = int(datetime.combine(booking.check_out, co_time).timestamp() * 1000)
+
+    token = await _get_token()
+    ok = True
+    for entry in booking.ttlock_pwd_ids.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        lock_id_s, pwd_id_s = entry.split(":", 1)
+        payload = {
+            "clientId":      settings.ttlock_client_id,
+            "accessToken":   token,
+            "lockId":        int(lock_id_s),
+            "keyboardPwdId": int(pwd_id_s),
+            "startDate":     start_ms,
+            "endDate":       end_ms,
+            "changeType":    2,   # 2 = via gateway
+            "date":          int(_time.time() * 1000),
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                r = await client.post(f"{BASE_URL}/keyboardPwd/changePeriod", data=payload, timeout=15)
+                r.raise_for_status()
+                _check(r.json())
+        except Exception as e:
+            logger.error(f"Booking {booking.id}: TTLock changePeriod failed for {entry}: {e}")
+            ok = False
+    return ok
