@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import select, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -71,6 +71,7 @@ async def sync_bookings(
                 balance=item.get("balance", 0),
                 status=item.get("status", "confirmed"),
                 source=item.get("source"),
+                created_at=datetime.utcnow(),  # NEW (20.9.26)
             )
             db.add(new_booking)
         synced += 1

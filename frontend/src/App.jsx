@@ -169,7 +169,7 @@ export default function App() {
       case "conversations": return <Conversations navigate={navigate} onOpenConversation={refresh} />;
       case "locks": return <LockManagement />; // NEW (28.7.26)
       case "campaigns": return <Campaigns />; // NEW (17.7.26)
-      case "marketing": return <Marketing />;
+      case "marketing": return <Marketing navigate={navigate} />;
       case "reports":   return <Reports />;
       case "settings":  return <Settings />;
       default:          return <Dashboard navigate={navigate} />;

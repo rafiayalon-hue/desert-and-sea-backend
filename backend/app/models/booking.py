@@ -40,4 +40,8 @@ class Booking(Base):
     payment_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
     payment_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # NEW (20.9.26): מתי ההזמנה נכנסה למערכת לראשונה. נקבע פעם אחת ביצירה
+    # ולא משתנה בעדכונים (בניגוד ל-synced_at). משמש למדידת קמפיינים.
+    # NULL = לא ידוע (הזמנות היסטוריות מייבוא אקסל).
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     guest = relationship("Guest", backref="bookings")

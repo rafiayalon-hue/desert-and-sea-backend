@@ -183,6 +183,7 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
             status=_map_status(mh_status),
             source=source,
             synced_at=datetime.utcnow(),
+            created_at=datetime.utcnow(),  # NEW (20.9.26) — נקבע פעם אחת בלבד
         )
         db.add(booking)
         await db.flush()

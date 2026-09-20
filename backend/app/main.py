@@ -37,6 +37,14 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_returning_guest BOOLEAN DEFAULT FALSE"))
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ttlock_pwd_ids TEXT"))
         await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS proposed_entry_code VARCHAR(20)"))
+        # NEW (20.9.26): created_at — מתי ההזמנה נכנסה לראשונה (למדידת קמפיינים).
+        # מילוי חד-פעמי משוער להזמנות שנכנסו דרך ה-webhook (מ-8.7.26) ועד היום:
+        # synced_at הוא הקירוב הכי טוב שיש. הזמנות מייבוא האקסל (מרץ) נשארות NULL.
+        await conn.execute(text("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_at TIMESTAMP"))
+        await conn.execute(text(
+            "UPDATE bookings SET created_at = synced_at "
+            "WHERE created_at IS NULL AND synced_at >= '2026-07-08' AND synced_at < '2026-09-21'"
+        ))
 
         # message_log table (idempotent)
         await conn.execute(text("""

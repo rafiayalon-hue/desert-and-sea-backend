@@ -80,6 +80,47 @@ function formatDate2(d) {
   return new Date(d).toLocaleDateString("he-IL", { day: "2-digit", month: "2-digit", year: "2-digit" });
 }
 
+// NEW (20.9.26): תוצאות קמפיין — נמדד לפי מתי ההזמנה נוצרה (created_at),
+// מול קצב רגיל ב-8 השבועות שלפני. ראו backend campaigns.py → list_campaigns.
+function Stat({ value, label, tone }) {
+  const color = tone === "bad" ? "var(--error)" : tone === "good" ? "var(--success)" : "var(--terra)";
+  return (
+    <div style={{ minWidth: 92 }}>
+      <div style={{ fontWeight: 800, fontSize: "1.15rem", color }}>{value}</div>
+      <div style={{ fontSize: ".72rem", color: "var(--text-muted)" }}>{label}</div>
+    </div>
+  );
+}
+
+function CampaignResults({ c }) {
+  if (c.status === "upcoming") {
+    return <div style={{ fontSize: ".8rem", color: "var(--text-muted)", marginTop: 8 }}>עוד לא התחיל</div>;
+  }
+  const lift = c.baseline_per_week != null && c.baseline_per_week > 0
+    ? Math.round((c.per_week / c.baseline_per_week - 1) * 100) : null;
+  const costPerBooking = c.budget && c.bookings_count ? Math.round(c.budget / c.bookings_count) : null;
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div style={{ display: "flex", gap: 18, flexWrap: "wrap" }}>
+        <Stat value={c.bookings_count} label="הזמנות ישירות חדשות" />
+        <Stat value={`₪${Math.round(c.revenue).toLocaleString("he-IL")}`} label={`הכנסה · ${c.nights} לילות`} />
+        <Stat value={c.new_inquiries} label={`פניות וואטסאפ חדשות (מתוך ${c.inquiries})`} />
+        <Stat value={`${c.per_week}`} label={c.baseline_per_week != null ? `הזמנות לשבוע (רגיל: ${c.baseline_per_week})` : "הזמנות לשבוע"} />
+        {lift != null && <Stat value={`${lift >= 0 ? "+" : ""}${lift}%`} label="מול שבוע רגיל" tone={lift >= 0 ? "good" : "bad"} />}
+        {costPerBooking != null && <Stat value={`₪${costPerBooking.toLocaleString("he-IL")}`} label="עלות להזמנה" />}
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 8, fontSize: ".74rem", color: "var(--text-muted)" }}>
+        {c.one_night_family > 0 && (
+          <span style={{ color: "var(--error)", fontWeight: 700 }}>⚠ {c.one_night_family} הזמנות של לילה בודד למשפחה</span>
+        )}
+        {c.airbnb_count > 0 && <span>+ {c.airbnb_count} הזמנות Airbnb בתקופה (לידיעה)</span>}
+        {c.baseline_per_week == null && <span>אין עדיין מספיק היסטוריה להשוואה לשבוע רגיל</span>}
+        {c.status === "active" && <span>· הקמפיין פעיל — המספרים מתעדכנים</span>}
+      </div>
+    </div>
+  );
+}
+
 // NEW (18.7.26): מעקב קמפיינים — קליל ופשוט, מיועד לאבישג. שם + פלטפורמה
 // + תאריכים (+ תקציב אופציונלי), והתוצאות (הזמנות/הכנסה) מחושבות לבד.
 function CampaignTracker() {
@@ -197,14 +238,7 @@ function CampaignTracker() {
               </div>
               <button onClick={() => removeCampaign(c.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)" }}>🗑️</button>
             </div>
-            <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
-              <div style={{ fontSize: ".85rem" }}>
-                <span style={{ fontWeight: 700, color: "var(--terra)" }}>{c.bookings_count}</span> הזמנות ישירות בטווח
-              </div>
-              <div style={{ fontSize: ".85rem" }}>
-                <span style={{ fontWeight: 700, color: "var(--terra)" }}>₪{c.revenue.toLocaleString("he-IL")}</span> הכנסה
-              </div>
-            </div>
+            <CampaignResults c={c} />
           </div>
         ))
       )}

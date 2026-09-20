@@ -144,27 +144,82 @@ async def delete_campaign(campaign_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/list")
 async def list_campaigns(db: AsyncSession = Depends(get_db)):
     """
-    כל הקמפיינים שנרשמו, כל אחד עם תוצאות מחושבות בזמן אמת: כמה
-    הזמנות ישירות/מהאתר "נכנסו" (synced_at) בטווח התאריכים של הקמפיין,
-    וסך ההכנסה שלהן. קירוב, לא ייחוס מדויק — אבל מספיק לראות מגמה.
+    כל הקמפיינים, עם תוצאות מחושבות בזמן אמת.
+
+    REWRITE (20.9.26): עד עכשיו נמדד לפי synced_at — אבל synced_at מתעדכן
+    בכל שינוי בהזמנה (וכל 352 ההזמנות מייבוא האקסל קיבלו אותו תאריך), כך
+    שהמספרים היו חסרי משמעות. עכשיו נמדד לפי created_at — מתי ההזמנה
+    נכנסה לראשונה — ומושווה לקצב "רגיל" ב-8 השבועות שלפני הקמפיין.
+
+    מה נספר:
+      - הזמנות שנוצרו בטווח (ישיר + אתר), לא מבוטלות; לילות, הכנסה.
+      - לילה בודד למשפחה (ילדים>0 או 4+ נפשות) — עסקה לא רצויה, מסומנת.
+      - הזמנות Airbnb בטווח — לידיעה (קמפיין כללי יכול להזיז גם אותן).
+      - פניות וואטסאפ נכנסות בטווח: מספרים שונים, ומתוכם חדשים
+        (טלפון שלא הופיע אף פעם בהזמנה).
+      - קצב בסיס: הזמנות ישירות לשבוע ב-8 השבועות שלפני ההתחלה
+        (None אם אין מספיק נתוני created_at לתקופה הזו).
     """
+    from app.models import MessageLog  # import מקומי — למנוע תלות מעגלית
+
     result = await db.execute(select(Campaign).order_by(Campaign.start_date.desc()))
     campaigns = result.scalars().all()
 
-    all_bookings_result = await db.execute(
-        select(Booking).where(Booking.source.in_(["direct", "website"]))
-    )
-    relevant_bookings = all_bookings_result.scalars().all()
+    all_bookings = (await db.execute(select(Booking))).scalars().all()
+    known_phones = {_normalize_phone(b.guest_phone) for b in all_bookings if b.guest_phone}
+    first_booking_by_phone: dict[str, datetime] = {}
+    for b in all_bookings:
+        if b.guest_phone and b.created_at:
+            k = _normalize_phone(b.guest_phone)
+            if k not in first_booking_by_phone or b.created_at < first_booking_by_phone[k]:
+                first_booking_by_phone[k] = b.created_at
+
+    inbound = (await db.execute(
+        select(MessageLog).where(MessageLog.direction == "inbound")
+    )).scalars().all()
+
+    earliest_created = min((b.created_at for b in all_bookings if b.created_at), default=None)
+
+    def is_cancelled(b):
+        return "cancel" in (b.status or "").lower()
+
+    def is_direct(b):
+        return (b.source or "direct").lower() in ("direct", "website", "homepage")
+
+    def nights(b):
+        return (b.check_out - b.check_in).days if b.check_in and b.check_out else 0
 
     output = []
     for c in campaigns:
         start_dt = datetime.combine(c.start_date, datetime.min.time())
         end_dt = datetime.combine(c.end_date, datetime.max.time())
-        matched = [
-            b for b in relevant_bookings
-            if b.synced_at and start_dt <= b.synced_at <= end_dt
-            and "cancel" not in (b.status or "").lower()
-        ]
+        in_window = [b for b in all_bookings
+                     if b.created_at and start_dt <= b.created_at <= end_dt and not is_cancelled(b)]
+        direct = [b for b in in_window if is_direct(b)]
+        airbnb = [b for b in in_window if (b.source or "").lower() == "airbnb"]
+        one_night_family = [b for b in direct if nights(b) == 1
+                            and ((b.children or 0) > 0 or (b.adults or 0) + (b.children or 0) >= 4)]
+
+        # פניות וואטסאפ נכנסות בטווח
+        phones_in_window = {_normalize_phone(m.phone) for m in inbound
+                            if m.created_at and start_dt <= m.created_at <= end_dt and m.phone}
+        new_phones = {p for p in phones_in_window
+                      if p not in known_phones
+                      or (p in first_booking_by_phone and first_booking_by_phone[p] >= start_dt)}
+
+        # קצב בסיס — 8 שבועות לפני ההתחלה
+        base_start = start_dt - timedelta(weeks=8)
+        baseline_per_week = None
+        if earliest_created and earliest_created <= base_start:
+            base = [b for b in all_bookings if b.created_at and base_start <= b.created_at < start_dt
+                    and not is_cancelled(b) and is_direct(b)]
+            baseline_per_week = round(len(base) / 8, 1)
+
+        today_dt = datetime.utcnow()
+        eff_end = min(end_dt, today_dt)
+        weeks = max((eff_end - start_dt).days / 7, 1 / 7) if eff_end > start_dt else 0
+        per_week = round(len(direct) / weeks, 1) if weeks else 0
+
         output.append({
             "id": c.id,
             "name": c.name,
@@ -173,7 +228,15 @@ async def list_campaigns(db: AsyncSession = Depends(get_db)):
             "end_date": c.end_date.isoformat(),
             "budget": float(c.budget) if c.budget is not None else None,
             "notes": c.notes,
-            "bookings_count": len(matched),
-            "revenue": sum(b.total_price or 0 for b in matched),
+            "bookings_count": len(direct),
+            "revenue": float(sum(b.total_price or 0 for b in direct)),
+            "nights": sum(nights(b) for b in direct),
+            "one_night_family": len(one_night_family),
+            "airbnb_count": len(airbnb),
+            "inquiries": len(phones_in_window),
+            "new_inquiries": len(new_phones),
+            "per_week": per_week,
+            "baseline_per_week": baseline_per_week,
+            "status": "upcoming" if start_dt > today_dt else ("active" if end_dt >= today_dt else "ended"),
         })
     return output

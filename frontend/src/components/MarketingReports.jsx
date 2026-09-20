@@ -277,8 +277,47 @@ function ChannelsAndLoyalty({ confirmed, today }) {
   );
 }
 
+// 6. הזמנות לבדיקה — NEW (20.9.26)
+// לילה בודד למשפחה = עסקה רעה לשני הצדדים (הרבה עבודה: הכנה, הפשטה, כביסה —
+// ולאורחים אין זמן ליהנות). "1 מבוגר, 0 ילדים" = כמעט תמיד הרכב שלא הגיע
+// ממיניהוטל (בעיקר הזמנות Airbnb) — לתקן ידנית כדי שנתוני התפוסה יהיו נכונים.
+const isFamily = b => (b.children || 0) > 0 || (b.adults || 0) + (b.children || 0) >= 4;
+
+function BookingsToCheck({ confirmed, today, navigate }) {
+  const upcoming = confirmed.filter(b => b.checkin >= today).sort((a, b) => a.checkin.localeCompare(b.checkin));
+  const oneNight = upcoming.filter(b => nightsOf(b) === 1);
+  const missing = confirmed.filter(b => (b.adults || 0) <= 1 && !(b.children > 0) && b.checkin >= addDays(today, -365));
+  const row = (b, note, tone) => (
+    <tr key={b.id} onClick={() => navigate && navigate("booking", b.id)} style={{ cursor: navigate ? "pointer" : "default" }}>
+      <td style={{ ...td, fontWeight: 600 }}>{b.full_name}</td>
+      <td style={td}>{fmt(b.checkin)} · {WD_LONG[wd(b.checkin)]}</td>
+      <td style={td}>{b.room_display}</td>
+      <td style={td}>{b.adults || 0}+{b.children || 0}</td>
+      <td style={td}><Badge tone={tone}>{note}</Badge></td>
+    </tr>
+  );
+  if (!oneNight.length && !missing.length) return null;
+  return (
+    <div className="card" style={{ marginBottom: 20 }}>
+      <div className="card-title">הזמנות לבדיקה</div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead><tr><th style={th}>אורח</th><th style={th}>כניסה</th><th style={th}>יחידה</th><th style={th}>מבוגרים+ילדים</th><th style={th}></th></tr></thead>
+        <tbody>
+          {oneNight.map(b => isFamily(b)
+            ? row(b, "⚠ לילה בודד למשפחה", "bad")
+            : row(b, "לילה בודד — זוג", "info"))}
+          {missing.map(b => row(b, "הרכב חסר — לתקן במיניהוטל", "warn"))}
+        </tbody>
+      </table>
+      <div style={{ fontSize: ".7rem", color: "var(--text-muted)", marginTop: 8 }}>
+        כשפותחים סופ"ש ללילה בודד — רק לזוגות. "הרכב חסר": 1 מבוגר בלי ילדים, בדרך כלל הזמנת Airbnb שהגיעה בלי מספר אורחים.
+      </div>
+    </div>
+  );
+}
+
 // ─── ראשי ───────────────────────────────────────────────────────────────────
-export default function MarketingReports({ confirmed }) {
+export default function MarketingReports({ confirmed, navigate }) {
   const today = iso(new Date());
   const map = buildNightMap(confirmed);
   const next30 = rangeStats(map, today, addDays(today, 29));
@@ -302,6 +341,7 @@ export default function MarketingReports({ confirmed }) {
         {nh && <Kpi value={`${nh.pct}%`} label={`מוזמן ל${nextHoliday.name}`} note={`${nh.free} לילות פנויים`} />}
         <ChannelKpi confirmed={confirmed} today={today} />
       </div>
+      <BookingsToCheck confirmed={confirmed} today={today} navigate={navigate} />
       <HolidayPace map={map} confirmed={confirmed} today={today} />
       <Forward90 map={map} today={today} />
       <WeekdayOccupancy map={map} today={today} />
