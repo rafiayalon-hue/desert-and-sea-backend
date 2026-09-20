@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useBookings } from "../hooks/useBookings";
-import MarketingReports from "../components/MarketingReports";
 
 const monthsHe = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני",
                   "יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
@@ -622,7 +621,6 @@ export default function Reports() {
         <YearOverYear confirmed={confirmed} />
         <CumulativeRevenue confirmed={confirmed} />
       </div>
-      <MarketingReports confirmed={confirmed} />
     </div>
   );
 }

@@ -6,6 +6,7 @@ import BookingDetail from "./pages/BookingDetail";
 import Settings from "./pages/Settings";
 import Guests from "./pages/Guests";
 import Reports from "./pages/Reports";
+import Marketing from "./pages/Marketing"; // NEW (19.9.26)
 import Conversations from "./pages/Conversations"; // NEW (17.7.26)
 import LockManagement from "./pages/LockManagement"; // NEW (28.7.26)
 import Campaigns from "./pages/Campaigns";         // NEW (17.7.26)
@@ -168,6 +169,7 @@ export default function App() {
       case "conversations": return <Conversations navigate={navigate} onOpenConversation={refresh} />;
       case "locks": return <LockManagement />; // NEW (28.7.26)
       case "campaigns": return <Campaigns />; // NEW (17.7.26)
+      case "marketing": return <Marketing />;
       case "reports":   return <Reports />;
       case "settings":  return <Settings />;
       default:          return <Dashboard navigate={navigate} />;

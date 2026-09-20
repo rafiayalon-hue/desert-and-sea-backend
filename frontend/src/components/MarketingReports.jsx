@@ -290,9 +290,9 @@ export default function MarketingReports({ confirmed }) {
 
   return (
     <div>
-      <div className="page-header" style={{ marginTop: 10 }}>
+      <div className="page-header">
         <div>
-          <div className="page-title" style={{ fontSize: "1.3rem" }}>שיווק</div>
+          <div className="page-title">שיווק</div>
           <div className="page-subtitle">איפה חסרות הזמנות ומה עושים</div>
         </div>
       </div>

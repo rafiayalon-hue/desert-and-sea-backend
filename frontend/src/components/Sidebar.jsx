@@ -6,6 +6,7 @@ export default function Sidebar({ currentPage, navigate, unreadCount = 0 }) {
     { id: "conversations", label: "שיחות",    icon: "💬", badge: unreadCount },
     { id: "campaigns",     label: "קמפיינים", icon: "📣" }, // NEW (17.7.26)
     { id: "locks",         label: "מנעולים",  icon: "🔒" }, // NEW (28.7.26)
+    { id: "marketing",     label: "שיווק",    icon: "🎯" }, // NEW (19.9.26)
     { id: "reports",       label: "דוחות",    icon: "📊" },
     { id: "settings",      label: "הגדרות",   icon: "⚙️" },
   ];
