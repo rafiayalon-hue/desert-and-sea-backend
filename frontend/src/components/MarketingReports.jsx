@@ -286,7 +286,10 @@ const isFamily = b => (b.children || 0) > 0 || (b.adults || 0) + (b.children || 
 function BookingsToCheck({ confirmed, today, navigate }) {
   const upcoming = confirmed.filter(b => b.checkin >= today).sort((a, b) => a.checkin.localeCompare(b.checkin));
   const oneNight = upcoming.filter(b => nightsOf(b) === 1);
-  const missing = confirmed.filter(b => (b.adults || 0) <= 1 && !(b.children > 0) && b.checkin >= addDays(today, -365));
+  // אורח יחיד אמיתי: כותבים "יחיד" בהערות הפנימיות של ההזמנה, והיא יוצאת מהרשימה.
+  const soloConfirmed = b => /יחיד/.test(b.notes || "");
+  const missing = confirmed.filter(b => (b.adults || 0) <= 1 && !(b.children > 0)
+    && b.checkin >= addDays(today, -365) && !soloConfirmed(b));
   const row = (b, note, tone) => (
     <tr key={b.id} onClick={() => navigate && navigate("booking", b.id)} style={{ cursor: navigate ? "pointer" : "default" }}>
       <td style={{ ...td, fontWeight: 600 }}>{b.full_name}</td>
@@ -310,7 +313,7 @@ function BookingsToCheck({ confirmed, today, navigate }) {
         </tbody>
       </table>
       <div style={{ fontSize: ".7rem", color: "var(--text-muted)", marginTop: 8 }}>
-        כשפותחים סופ"ש ללילה בודד — רק לזוגות. "הרכב חסר": 1 מבוגר בלי ילדים, בדרך כלל הזמנת Airbnb שהגיעה בלי מספר אורחים.
+        כשפותחים סופ"ש ללילה בודד — רק לזוגות. "הרכב חסר": 1 מבוגר בלי ילדים, בדרך כלל הזמנת Airbnb שהגיעה בלי מספר אורחים. אם זה באמת אורח יחיד — לכתוב "יחיד" בהערות הפנימיות של ההזמנה.
       </div>
     </div>
   );
