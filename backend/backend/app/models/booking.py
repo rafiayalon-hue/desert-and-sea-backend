@@ -1,0 +1,47 @@
+from datetime import date, datetime
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from app.database import Base
+class Booking(Base):
+    __tablename__ = "bookings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    minihotel_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    guest_id: Mapped[int | None] = mapped_column(ForeignKey("guests.id"), nullable=True)
+    # פרטי אורח
+    guest_name: Mapped[str] = mapped_column(String(200))
+    guest_phone: Mapped[str] = mapped_column(String(20), default="")
+    guest_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    adults: Mapped[int] = mapped_column(Integer, default=1)
+    children: Mapped[int] = mapped_column(Integer, default=0)
+    # פרטי שהייה
+    room_name: Mapped[str] = mapped_column(String(100))
+    check_in: Mapped[date] = mapped_column(Date)
+    check_out: Mapped[date] = mapped_column(Date)
+    total_price: Mapped[float] = mapped_column(Numeric(10, 2))
+    balance: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
+    source: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # מצב
+    status: Mapped[str] = mapped_column(String(50), default="confirmed")
+    entry_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # קוד מוצע (טרם נוצר בפועל ב-TTLock) — מחושב 48 שעות לפני ההגעה (או מיד
+    # אם ההזמנה נוצרה עם פחות התראה), לצורך תצוגה/עריכה לפני שהוא הופך
+    # בפועל ל-entry_code. ראו app/scheduler.py — _prepare_entry_code.
+    proposed_entry_code: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Comma-separated TTLock keyboardPwdId values — needed when a booking spans
+    # BOTH cabins (room_name contains "des_sea") and gets a passcode on two
+    # locks at once. Column already exists in DB (see main.py ALTER TABLE);
+    # this was missing from the ORM model so it was previously unreadable/unwritable.
+    ttlock_pwd_ids: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    checkin_time: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    checkout_time: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # תשלום
+    payment_method: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    payment_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # NEW (20.9.26): מתי ההזמנה נכנסה למערכת לראשונה. נקבע פעם אחת ביצירה
+    # ולא משתנה בעדכונים (בניגוד ל-synced_at). משמש למדידת קמפיינים.
+    # NULL = לא ידוע (הזמנות היסטוריות מייבוא אקסל).
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    guest = relationship("Guest", backref="bookings")
