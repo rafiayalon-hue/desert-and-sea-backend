@@ -45,3 +45,12 @@ class Booking(Base):
     # NULL = לא ידוע (הזמנות היסטוריות מייבוא אקסל).
     created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     guest = relationship("Guest", backref="bookings")
+
+
+# NEW (20.9.26): זיהוי אחיד של הזמנה לא-פעילה. בבסיס הנתונים יש כמה כתיבים
+# לאותו מצב: "cancelled" (מה-webhook), "Cancel" (ייבוא האקסל / ערוץ), "CL"
+# (קוד מיניהוטל), "CLOSE" (סגירת חדר). עד עכשיו ה-scheduler בדק רק
+# == "cancelled", ולכן יצר קודי כניסה (ואולי שלח הודעות) להזמנות "Cancel".
+def is_cancelled_status(status: str | None) -> bool:
+    s = (status or "").strip().lower()
+    return s.startswith("cancel") or s in ("cl", "close", "closed")

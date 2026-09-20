@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal
 from app.integrations.whatsapp import send_whatsapp_template
-from app.models import Booking, MessageLog
+from app.models import Booking, MessageLog, is_cancelled_status
 from app.models.checkin_token import CheckinToken
 
 logger = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ async def create_and_send_entry_code(booking_id: int, db: AsyncSession | None = 
         booking = result.scalar_one_or_none()
         if booking is None:
             return
-        if (booking.status or "").strip().lower() == "cancelled":
+        if is_cancelled_status(booking.status):
             return
         if not booking.guest_phone or not booking.check_in or not booking.check_out:
             return
@@ -224,7 +224,7 @@ async def _send_scheduled(booking_id: int, message_type: str, phone: str):
         if booking is None:
             logger.info(f"Booking {booking_id}: not found, skipping {message_type}")
             return
-        if (booking.status or "").strip().lower() == "cancelled":
+        if is_cancelled_status(booking.status):
             logger.info(f"Booking {booking_id}: cancelled, skipping {message_type}")
             return
 
@@ -430,7 +430,20 @@ async def _run_reconciliation():
         bookings = result.scalars().all()
 
     for booking in bookings:
-        if (booking.status or "").strip().lower() == "cancelled":
+        if is_cancelled_status(booking.status):
+            # NEW (20.9.26): הזמנה מבוטלת שעדיין מחזיקה קוד פעיל על המנעול
+            # (שהייה שטרם הסתיימה) — מוחקים את הקוד. בלי זה, אורח שביטל
+            # נשאר עם קוד תקף לדלת. לא נשלחת שום הודעה.
+            if booking.ttlock_pwd_ids and booking.check_out and booking.check_out >= now.date():
+                try:
+                    from app.integrations.ttlock import remove_passcode_after_checkout
+                    async with AsyncSessionLocal() as db2:
+                        fresh = await db2.get(Booking, booking.id)
+                        if fresh is not None and fresh.ttlock_pwd_ids:
+                            ok = await remove_passcode_after_checkout(fresh, db2)
+                            logger.info(f"Reconcile: removed passcode of cancelled booking {booking.id} (ok={ok})")
+                except Exception as e:
+                    logger.error(f"Reconcile: failed removing passcode of cancelled booking {booking.id}: {e}")
             continue
         if not booking.guest_phone or not booking.check_in or not booking.check_out:
             continue

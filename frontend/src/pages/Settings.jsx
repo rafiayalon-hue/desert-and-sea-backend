@@ -1,4 +1,5 @@
 import ImportExcel from "../components/ImportExcel";
+import ImportContacts from "../components/ImportContacts"; // NEW (20.9.26)
 import { useState, useEffect } from "react";
 import { WHATSAPP_MESSAGES } from "../data/whatsappMessages";
 
@@ -320,6 +321,7 @@ export default function Settings() {
           ייבוא הזמנות היסטוריות מקובץ Excel של MiniHotel
         </div>
         <ImportExcel />
+        <ImportContacts />
       </Section>
 
       <button className="btn btn-primary" onClick={saveAll}>

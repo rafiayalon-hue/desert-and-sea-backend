@@ -11,7 +11,7 @@ from app.integrations.ttlock import (
     LOCK_IDS,
 )
 from app.scheduler import send_entry_code_now
-from app.models import Booking
+from app.models import Booking, is_cancelled_status
 router = APIRouter()
 @router.get("/status")
 async def locks_status():
@@ -51,7 +51,7 @@ async def audit_passcodes(db: AsyncSession = Depends(get_db)):
     # הזמנות מבוטלות לא נחשבות "לגיטימיות" — קוד ששייך רק להן ייחשב יתום.
     legitimate: dict[str, Booking] = {}
     for b in bookings:
-        if (b.status or "").strip().lower() == "cancelled":
+        if is_cancelled_status(b.status):
             continue
         for entry in (b.ttlock_pwd_ids or "").split(","):
             entry = entry.strip()

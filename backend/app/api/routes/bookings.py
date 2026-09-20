@@ -283,6 +283,106 @@ async def upload_excel(
     return {"inserted": inserted, "updated": updated, "errors": errors}
 
 
+# ---------------------------------------------------------------------------
+# NEW (20.9.26): עדכון שקט של טלפונים ושמות מקובץ Excel
+# ---------------------------------------------------------------------------
+# למה endpoint נפרד ולא PATCH /{id}: ה-PATCH הרגיל מפעיל אוטומציה כשמוסיפים
+# טלפון להזמנה שלא היה לה (אישור הזמנה + תזמון הודעות). כאן זה אסור — אלה
+# השלמות נתונים לאורחי עבר, ואסור שיקבלו וואטסאפ.
+#
+# הגנות:
+#   - לא קורא ל-trigger_confirmation / schedule_booking_messages.
+#   - לא נוגע ב-synced_at / created_at (לא משבש מדידת קמפיינים).
+#   - טלפון להזמנה עתידית / שיצאה ב-8 הימים האחרונים (גם אם מבוטלת) — לא מתעדכן
+#     כאן, כי ה-reconciliation (כל 30 דק') היה יוצר קוד כניסה / שולח הודעת יציאה.
+#     הזמנות כאלה מוחזרות ברשימת future_skipped — להזין ידנית בדשבורד.
+#
+# פורמט הקובץ: שורת כותרות עם העמודות minihotel_id, טלפון, שם אורח
+# (סדר העמודות לא משנה; עמודות נוספות מתעלמים מהן).
+
+def _clean_phone(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, float):
+        val = int(val)
+    raw = str(val).strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if not digits:
+        return ""
+    if raw.startswith("+"):
+        return "+" + digits
+    if digits.startswith("972") or digits.startswith("0"):
+        return raw  # מספר ישראלי — נשמר כפי שהוקלד (הנרמול ל-E.164 נעשה בשליחה)
+    if len(digits) == 9 and digits.startswith("5"):
+        return "0" + digits  # נייד ישראלי שאיבד את ה-0 באקסל
+    return "+" + digits  # מספר בינלאומי שנשמר באקסל כמספר (למשל 1646...)
+
+
+@router.post("/import-contacts")
+async def import_contacts(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+):
+    import io
+    import openpyxl
+
+    wb = openpyxl.load_workbook(io.BytesIO(await file.read()), data_only=True)
+    ws = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows:
+        raise HTTPException(status_code=400, detail="הקובץ ריק")
+
+    header = [str(h).strip() if h is not None else "" for h in rows[0]]
+    try:
+        i_id = header.index("minihotel_id")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="חסרה עמודה minihotel_id")
+    i_phone = header.index("טלפון") if "טלפון" in header else None
+    i_name = header.index("שם אורח") if "שם אורח" in header else None
+
+    today = date.today()
+    phones_updated, names_updated = [], []
+    not_found, future_skipped = [], []
+
+    for row in rows[1:]:
+        mid = row[i_id] if i_id < len(row) else None
+        if not mid:
+            continue
+        mid = str(mid).strip()
+        booking = await db.scalar(select(Booking).where(Booking.minihotel_id == mid))
+        if booking is None:
+            not_found.append(mid)
+            continue
+
+        if i_name is not None and i_name < len(row) and row[i_name]:
+            new_name = str(row[i_name]).strip()
+            if new_name and new_name != booking.guest_name:
+                booking.guest_name = new_name
+                names_updated.append(mid)
+
+        if i_phone is not None and i_phone < len(row):
+            new_phone = _clean_phone(row[i_phone])
+            if new_phone and new_phone != (booking.guest_phone or ""):
+                # גם הזמנות מבוטלות בחלון — ליתר ביטחון (הטלפון לא נדרש להן ממילא).
+                # ה-reconciliation שולח הודעת יציאה עד 7 ימים אחרי היציאה, ויוצר
+                # קוד כניסה לכל הזמנה שטרם יצאה — לכן חלון ההגנה הוא 8 ימים אחורה.
+                is_active_window = booking.check_out and booking.check_out >= today - timedelta(days=8)
+                if is_active_window:
+                    future_skipped.append({"minihotel_id": mid, "guest_name": booking.guest_name})
+                    continue
+                booking.guest_phone = new_phone
+                phones_updated.append(mid)
+
+    await db.commit()
+    return {
+        "phones_updated": len(phones_updated),
+        "names_updated": len(names_updated),
+        "not_found": not_found,
+        "future_skipped": future_skipped,
+        "messages_sent": 0,
+    }
+
+
 from pydantic import BaseModel
 from typing import Optional
 
