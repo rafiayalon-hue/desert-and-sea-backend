@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from fastapi.staticfiles import StaticFiles
 import os
+from app.api.routes import ha
+     app.include_router(ha.router)
 
 from app.api.routes import bookings, guests, locks, messages, settings
 from app.api.routes import guests_merge
