@@ -5,8 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from fastapi.staticfiles import StaticFiles
 import os
-from app.api.routes import ha
-     app.include_router(ha.router)
 
 from app.api.routes import bookings, guests, locks, messages, settings
 from app.api.routes import guests_merge
@@ -14,6 +12,7 @@ from app.api.routes import webhook          # NEW
 from app.api.routes import whatsapp_inbound  # NEW — הודעות WhatsApp נכנסות
 from app.api.routes import campaigns         # NEW — רשימת פנייה לאורחי עבר
 from app.api.routes import public_checkin   # NEW — עמוד קוד כניסה באתר הציבורי
+from app.api.routes import ha                # NEW — ממשק ל-Home Assistant
 from app.database import engine, Base
 from app.scheduler import scheduler, run_reconciliation_now         # NEW
 
@@ -169,6 +168,7 @@ app.include_router(whatsapp_inbound.router, prefix="/api/webhook", tags=["webhoo
 app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"])  # NEW
 app.include_router(guests_merge.router, prefix="/api/guests", tags=["guests"])
 app.include_router(public_checkin.router)   # NEW — /public/entry-code/{token}
+app.include_router(ha.router)               # NEW — /api/ha/occupancy (Home Assistant)
 
 
 @app.get("/api/health")
