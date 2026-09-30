@@ -81,10 +81,19 @@ async def occupancy(
     )
     bookings = rows.scalars().all()
 
+    debug = []
     for b in bookings:
+        cabins = _cabins_for(b.room_name)
+        debug.append({
+            "id": b.id,
+            "room_name": b.room_name,
+            "status": b.status,
+            "check_in": b.check_in.isoformat(),
+            "check_out": b.check_out.isoformat(),
+            "matched": cabins,
+        })
         if is_cancelled_status(b.status):
             continue
-        cabins = _cabins_for(b.room_name)
         if not cabins:
             continue
 
@@ -101,4 +110,5 @@ async def occupancy(
                 result[c]["check_out"] = b.check_out.isoformat()
 
     result["generated_at"] = now.isoformat(timespec="seconds")
+    result["bookings_today"] = debug  # לאבחון: מה נמצא היום ואיך זוהה
     return result
