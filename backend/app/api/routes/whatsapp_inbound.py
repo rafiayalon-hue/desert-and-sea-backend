@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
+from app.integrations.sms import SmsError, send_sms, sms_enabled
 from app.integrations.whatsapp import _to_e164
 from app.models import Booking, MessageLog
 from app.models.business_settings import BusinessSettings
@@ -39,11 +40,19 @@ def _normalize_phone(phone: str) -> str:
 async def _send_sms_notification(to_number: str, body: str) -> None:
     """
     שולח SMS התראה קצר. best-effort בלבד — כשל בשליחת ה-SMS לא אמור
-    לגרום ל-500 על ה-webhook עצמו (Twilio ינסה שוב לשלוח את ה-WhatsApp
-    inbound event אם נקבל שגיאה, וזה לא הבעיה שצריך לתקן בניסיון הבא).
+    לגרום ל-500 על ה-webhook עצמו.
+    NEW (30.9.26): קודם דרך 019 (ספק ישראלי); Twilio SMS רק אם 019 לא מוגדר.
     """
+    if sms_enabled():
+        try:
+            await send_sms(to_number, body)
+            return
+        except SmsError as e:
+            logger.error(f"SMS notification via 019 failed: {e}")
+            return
+
     if not settings.twilio_account_sid or not settings.twilio_auth_token or not settings.twilio_sms_from:
-        logger.warning("SMS notification skipped: Twilio SMS not configured (twilio_sms_from missing)")
+        logger.warning("SMS notification skipped: no SMS provider configured")
         return
     try:
         async with httpx.AsyncClient(timeout=10) as client:
