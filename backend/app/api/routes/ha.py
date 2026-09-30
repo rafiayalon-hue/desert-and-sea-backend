@@ -56,7 +56,8 @@ def _cabins_for(room_name: str | None) -> list[str]:
         return ["ym", "mdbr"]
     if "sea" in r or "ים" in r:
         return ["ym"]
-    if "des" in r or "מדבר" in r:
+    # "Sesert" = שגיאת כתיב קיימת ב-MiniHotel לצימר מדבר
+    if "des" in r or "sesert" in r or "מדבר" in r:
         return ["mdbr"]
     return []
 
