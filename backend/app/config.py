@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     # ── MiniHotel (names the existing code reads — UPPERCASE) ──
     MH_USER: str = "desertsea"
-    MH_PASS: str = "desert@@003"
+    MH_PASS: str = "desert@@003"   # TODO: להעביר למשתנה MH_PASS ב-Railway ולמחוק מכאן (הסיסמה חשופה ב-GitHub)
     MINIHOTEL_HOTEL_ID: str = "desert89"
     # lowercase / extra MiniHotel fields (optional, tolerated)
     minihotel_api_key: str = ""
@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     # לרפי/אבישג כשמגיעה הודעת WhatsApp נכנסת — לא כפוף ל-A2P 10DLC כי
     # היעד הוא ישראל, לא ארה"ב (A2P חל רק על הודעות שהיעד שלהן בארה"ב).
     twilio_sms_from: str = ""
+    # ── SMS ישראלי (019SMS) — NEW (30.9.26): גיבוי כש-WhatsApp נכשל ──
+    sms_019_username: str = ""
+    sms_019_token: str = ""
+    sms_sender: str = "DesertSea"     # עד 11 תווים, אנגלית/ספרות
+    sms_enabled: bool = True          # מתג כללי; בפועל פעיל רק אם יש טוקן
+    # קישור לעמוד "פרטי הכניסה שלי" באתר, עם {token} במקום הטוקן.
+    # ריק = ה-SMS יישלח בלי קישור (רק עם הקוד).
+    checkin_page_url: str = ""
     class Config:
         env_file = ".env"
         case_sensitive = False   # TTLOCK_CLIENT_ID → ttlock_client_id

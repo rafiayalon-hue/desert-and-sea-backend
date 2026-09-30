@@ -13,6 +13,7 @@ from app.api.routes import whatsapp_inbound  # NEW — הודעות WhatsApp נ�
 from app.api.routes import campaigns         # NEW — רשימת פנייה לאורחי עבר
 from app.api.routes import public_checkin   # NEW — עמוד קוד כניסה באתר הציבורי
 from app.api.routes import ha                # NEW — ממשק ל-Home Assistant
+from app.api.routes import fallback          # NEW (30.9.26) — גיבוי SMS / wa.me / השלמת הודעות
 from app.database import engine, Base
 from app.scheduler import scheduler, run_reconciliation_now         # NEW
 
@@ -77,6 +78,10 @@ async def lifespan(app: FastAPI):
         ))
         await conn.execute(text(
             "CREATE INDEX IF NOT EXISTS ix_message_logs_phone ON message_logs (phone)"
+        ))
+        # NEW (30.9.26): ערוץ השליחה — 'whatsapp' / 'sms' (גיבוי 019)
+        await conn.execute(text(
+            "ALTER TABLE message_logs ADD COLUMN IF NOT EXISTS channel VARCHAR(10) DEFAULT 'whatsapp'"
         ))
 
         # NEW (18.7.26): מעקב קמפיינים שיווקיים — טבלה קלה, מיועדת
@@ -169,6 +174,7 @@ app.include_router(campaigns.router, prefix="/api/campaigns", tags=["campaigns"]
 app.include_router(guests_merge.router, prefix="/api/guests", tags=["guests"])
 app.include_router(public_checkin.router)   # NEW — /public/entry-code/{token}
 app.include_router(ha.router)               # NEW — /api/ha/occupancy (Home Assistant)
+app.include_router(fallback.router)         # NEW (30.9.26) — /api/fallback/*
 
 
 @app.get("/api/health")
