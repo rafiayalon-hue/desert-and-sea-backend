@@ -20,7 +20,8 @@ from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db  # ← לוודא שזה אותו import שמופיע ב-routes האחרים
 from app.models.booking import Booking, is_cancelled_status  # ← לוודא את שם הקובץ של המודל
@@ -61,9 +62,9 @@ def _cabins_for(room_name: str | None) -> list[str]:
 
 
 @router.get("/occupancy")
-def occupancy(
+async def occupancy(
     x_ha_token: str | None = Header(default=None),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
     _check_token(x_ha_token)
 
@@ -75,11 +76,10 @@ def occupancy(
         for c in ("ym", "mdbr")
     }
 
-    bookings = (
-        db.query(Booking)
-        .filter(Booking.check_in <= today, Booking.check_out >= today)
-        .all()
+    rows = await db.execute(
+        select(Booking).where(Booking.check_in <= today, Booking.check_out >= today)
     )
+    bookings = rows.scalars().all()
 
     for b in bookings:
         if is_cancelled_status(b.status):
