@@ -15,6 +15,8 @@ class MessageLog(Base):
     # NEW (17.7.26): 'outbound' (העסק שולח) / 'inbound' (אורח שולח) —
     # מאפשר לבנות תצוגת שיחה דו-כיוונית, לא רק יומן שליחות.
     direction: Mapped[str] = mapped_column(String(10), default="outbound")
+    # NEW (30.9.26): באיזה ערוץ יצאה ההודעה — 'whatsapp' / 'sms'
+    channel: Mapped[str | None] = mapped_column(String(10), nullable=True, default="whatsapp")
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
