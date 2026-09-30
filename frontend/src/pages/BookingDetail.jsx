@@ -63,6 +63,13 @@ function buildMessageBody(templateId, lang, booking, ttlockCode, paymentLink, ch
     .replace(/\{לינק_סליקה\}/g,    paymentLink || "");
 }
 
+// NEW (30.9.26): מספר לקישור wa.me — 0541234567 → 972541234567
+function waNumber(phone) {
+  let p = (phone || "").replace(/\D/g, "");
+  if (p.startsWith("0")) p = "972" + p.slice(1);
+  return p;
+}
+
 async function patchBooking(bookingId, data) {
   const res = await fetch(`${API_BASE}/bookings/${bookingId}`, {
     method: "PATCH",
@@ -294,6 +301,15 @@ export default function BookingDetail({ bookingId, navigate }) {
     finally { setSendingType(null); setPreviewMsg(null); }
   };
 
+  // NEW (30.9.26): פותח וואטסאפ (wa.me) עם ההודעה מוכנה — בלי Twilio.
+  // נשלח מהוואטסאפ של המכשיר שלוחץ (לא מהמספר העסקי).
+  const openInWhatsApp = () => {
+    if (!previewMsg) return;
+    window.open(`https://wa.me/${waNumber(phone)}?text=${encodeURIComponent(previewMsg.body)}`, "_blank", "noopener");
+    setSentMessages(prev => [...prev, previewMsg.type]);
+    setPreviewMsg(null);
+  };
+
   const saveName = async () => {
     if (!nameInput.trim()) return;
     setSavingName(true);
@@ -406,6 +422,10 @@ export default function BookingDetail({ bookingId, navigate }) {
             <div style={{ display: "flex", gap: 8 }}>
               <button className="btn btn-primary" style={{ flex: 1 }} onClick={confirmSend} disabled={!!sendingType}>
                 {sendingType ? "שולח..." : "✅ שלח"}
+              </button>
+              <button className="btn btn-secondary" style={{ flex: 1, background: "#25D366", color: "#fff", borderColor: "#25D366" }}
+                onClick={openInWhatsApp}>
+                📱 פתח בוואטסאפ
               </button>
               <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setPreviewMsg(null)}>ביטול</button>
             </div>
