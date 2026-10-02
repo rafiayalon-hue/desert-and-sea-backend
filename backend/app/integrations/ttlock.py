@@ -322,11 +322,14 @@ async def update_passcode_window(booking, db: AsyncSession) -> bool:
         }
         try:
             async with httpx.AsyncClient() as client:
-                r = await client.post(f"{BASE_URL}/keyboardPwd/changePeriod", data=payload, timeout=15)
-                r.raise_for_status()
+                # תיקון (2.10.26): הנתיב הנכון ב-TTLock הוא keyboardPwd/change
+                # (changePeriod לא קיים — כל עדכון שעות מהדשבורד נכשל בשקט).
+                r = await client.post(f"{BASE_URL}/keyboardPwd/change", data=payload, timeout=15)
+                if r.status_code >= 300:
+                    raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
                 _check(r.json())
             logger.info(f"Booking {booking.id}: TTLock period updated for {entry}")
         except Exception as e:
-            logger.error(f"Booking {booking.id}: TTLock changePeriod failed for {entry}: {e}")
+            logger.error(f"Booking {booking.id}: TTLock change failed for {entry}: {e}")
             ok = False
     return ok
