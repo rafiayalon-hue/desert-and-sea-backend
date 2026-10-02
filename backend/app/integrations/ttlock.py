@@ -9,14 +9,25 @@ Public API expected by the rest of the app:
   LOCK_IDS                              dict: room -> lockId
   assign_passcode_to_booking(booking, db, passcode=None) -> str   (the code)
   remove_passcode_after_checkout(booking, db) -> bool
+  update_passcode_window(booking, db) -> bool
   list_passcodes(lock_id) -> list[dict]
   delete_passcode_by_id(lock_id, keyboard_pwd_id) -> bool
   get_lock_status(lock_id) -> dict
+
+תיקון (2.10.26) — אזור זמן:
+  השרת ב-Railway רץ ב-UTC. datetime.combine(...).timestamp() על תאריך "נאיבי"
+  פירש 14:00 כ-14:00 UTC → במנעול (שעון ישראל) הופיע 17:00. עכשיו כל חלון
+  זמן נבנה עם Asia/Jerusalem — כולל מעבר אוטומטי לשעון חורף.
+תיקון (2.10.26) — שעות מההזמנה:
+  יצירת קוד התעלמה מ-checkin_time / checkout_time שבהזמנה (תמיד 14:00→12:00).
+  עכשיו גם היצירה וגם העדכון משתמשים באותו חלון (_booking_window).
 """
 import hashlib
 import logging
 import random
 import time as _time
+from datetime import date, datetime, time
+from zoneinfo import ZoneInfo
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 AUTH_URL = "https://euapi.ttlock.com/oauth2/token"
 BASE_URL = "https://euapi.ttlock.com/v3"
+
+TZ = ZoneInfo("Asia/Jerusalem")
 
 # room key -> lockId   (מדבר / ים ; קוד בעלים 4708# לא נוגעים בו)
 LOCK_IDS: dict[str, int] = {
@@ -181,14 +194,38 @@ def _gen_code() -> str:
             return code
 
 
+def _israel_ms(d: date, t: time) -> int:
+    """תאריך + שעה בשעון ישראל → epoch ms (נכון גם בשעון חורף/קיץ)."""
+    return int(datetime.combine(d, t, tzinfo=TZ).timestamp() * 1000)
+
+
 def _to_ms(d) -> int:
-    """date/datetime -> epoch ms. check_in at 14:00, check_out at 12:00."""
-    from datetime import datetime, time
-    if hasattr(d, "hour"):
-        dt = d
+    """date/datetime (שעון ישראל) -> epoch ms."""
+    if isinstance(d, datetime):
+        dt = d if d.tzinfo else d.replace(tzinfo=TZ)
     else:
-        dt = datetime.combine(d, time(0, 0))
+        dt = datetime.combine(d, time(0, 0), tzinfo=TZ)
     return int(dt.timestamp() * 1000)
+
+
+def _hhmm(val, default: time) -> time:
+    try:
+        h, m = str(val).strip().split(":")[:2]
+        return time(int(h), int(m))
+    except Exception:
+        return default
+
+
+def _default_checkout(check_out: date) -> time:
+    """יציאה: 14:00 בשבת, 12:00 בשאר הימים — כמו ב-scheduler."""
+    return time(14, 0) if check_out.isoweekday() == 6 else time(12, 0)
+
+
+def _booking_window(booking) -> tuple[int, int]:
+    """חלון הקוד לפי ההזמנה: checkin_time/checkout_time אם הוגדרו, אחרת ברירת מחדל."""
+    ci = _hhmm(getattr(booking, "checkin_time", None), time(14, 0))
+    co = _hhmm(getattr(booking, "checkout_time", None), _default_checkout(booking.check_out))
+    return _israel_ms(booking.check_in, ci), _israel_ms(booking.check_out, co)
 
 
 # ---------------------------------------------------------------------------
@@ -200,20 +237,13 @@ async def assign_passcode_to_booking(booking, db: AsyncSession,
     Create a period passcode on the relevant lock(s) for a booking,
     store entry_code + ttlock_pwd_ids on the booking, commit, return the code.
     """
-    from datetime import datetime, time
-
     lock_ids = _resolve_lock_ids(booking.room_name)
     if not lock_ids:
         logger.error(f"Booking {booking.id}: cannot resolve lock for room '{booking.room_name}'")
         return ""
 
     code = passcode or booking.entry_code or _gen_code()
-
-    # window: check_in 14:00 → check_out 12:00
-    start_dt = datetime.combine(booking.check_in, time(14, 0))
-    end_dt   = datetime.combine(booking.check_out, time(12, 0))
-    start_ms = int(start_dt.timestamp() * 1000)
-    end_ms   = int(end_dt.timestamp() * 1000)
+    start_ms, end_ms = _booking_window(booking)
 
     name = f"{booking.guest_name or 'Guest'} #{booking.id}"
 
@@ -231,7 +261,9 @@ async def assign_passcode_to_booking(booking, db: AsyncSession,
     booking.ttlock_pwd_ids = ",".join(pwd_ids)
     db.add(booking)
     await db.commit()
-    logger.info(f"Booking {booking.id}: passcode {code} set on {pwd_ids}")
+    logger.info(f"Booking {booking.id}: passcode {code} set on {pwd_ids} "
+                f"({datetime.fromtimestamp(start_ms / 1000, TZ):%d/%m %H:%M} → "
+                f"{datetime.fromtimestamp(end_ms / 1000, TZ):%d/%m %H:%M} Israel)")
     return code
 
 
@@ -263,26 +295,13 @@ async def update_passcode_window(booking, db: AsyncSession) -> bool:
     """
     Update the validity window (start/end) of a booking's existing passcode(s)
     on the lock(s), after check-in/checkout times were edited. Uses the same
-    period the booking now implies: check_in 14:00 → check_out 12:00, unless
-    booking.checkin_time / checkout_time override the hour. No-op (returns
-    False) if the booking has no passcode yet.
+    window as creation (_booking_window). No-op (returns False) if the booking
+    has no passcode yet.
     """
-    from datetime import datetime, time
-
     if not booking.ttlock_pwd_ids:
         return False
 
-    def _hhmm(val, default_h, default_m):
-        try:
-            h, m = str(val).strip().split(":")
-            return time(int(h), int(m))
-        except Exception:
-            return time(default_h, default_m)
-
-    ci_time = _hhmm(getattr(booking, "checkin_time", None), 14, 0)
-    co_time = _hhmm(getattr(booking, "checkout_time", None), 12, 0)
-    start_ms = int(datetime.combine(booking.check_in, ci_time).timestamp() * 1000)
-    end_ms = int(datetime.combine(booking.check_out, co_time).timestamp() * 1000)
+    start_ms, end_ms = _booking_window(booking)
 
     token = await _get_token()
     ok = True
@@ -306,6 +325,7 @@ async def update_passcode_window(booking, db: AsyncSession) -> bool:
                 r = await client.post(f"{BASE_URL}/keyboardPwd/changePeriod", data=payload, timeout=15)
                 r.raise_for_status()
                 _check(r.json())
+            logger.info(f"Booking {booking.id}: TTLock period updated for {entry}")
         except Exception as e:
             logger.error(f"Booking {booking.id}: TTLock changePeriod failed for {entry}: {e}")
             ok = False
