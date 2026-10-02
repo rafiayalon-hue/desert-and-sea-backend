@@ -62,6 +62,28 @@ async def wa_link(booking_id: int, message_type: str, db: AsyncSession = Depends
     return {"text": text, "url": f"https://wa.me/{_wa_number(booking.guest_phone)}?text={quote(text)}"}
 
 
+@router.post("/resync-lock-windows", dependencies=[Depends(_auth)])
+async def resync_lock_windows(db: AsyncSession = Depends(get_db)):
+    """NEW (2.10.26): מעדכן את חלון התוקף במנעול לכל הזמנה שעוד לא יצאה ויש לה קוד —
+    לתיקון קודים שנוצרו עם הסטה של 3 שעות (באג אזור זמן)."""
+    from datetime import date
+    from sqlalchemy import select
+    from app.integrations.ttlock import update_passcode_window
+    from app.models import is_cancelled_status
+
+    rows = (await db.execute(
+        select(Booking).where(Booking.check_out >= date.today(), Booking.ttlock_pwd_ids.isnot(None))
+    )).scalars().all()
+    out = []
+    for b in rows:
+        if is_cancelled_status(b.status) or not b.ttlock_pwd_ids:
+            continue
+        ok = await update_passcode_window(b, db)
+        out.append({"id": b.id, "guest": b.guest_name, "check_in": b.check_in.isoformat(),
+                    "checkin_time": b.checkin_time, "checkout_time": b.checkout_time, "updated": ok})
+    return {"count": len(out), "bookings": out}
+
+
 @router.get("/sms-test", dependencies=[Depends(_auth)])
 async def sms_test(phone: str):
     try:
