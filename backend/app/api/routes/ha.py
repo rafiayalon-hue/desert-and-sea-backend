@@ -113,3 +113,28 @@ async def occupancy(
     result["generated_at"] = now.isoformat(timespec="seconds")
     result["bookings_today"] = debug  # לאבחון: מה נמצא היום ואיך זוהה
     return result
+
+
+# ---------------------------------------------------------------------------
+# NEW (3.10.26): מצב סוללה של מנעולי TTLock — ל-HA (התראת סוללה נמוכה)
+# GET /api/ha/locks  →  {"mdbr": {"battery": 30}, "ym": {"battery": 85}, ...}
+# ---------------------------------------------------------------------------
+@router.get("/locks")
+async def locks_status(x_ha_token: str | None = Header(default=None)):
+    _check_token(x_ha_token)
+    from app.integrations.ttlock import LOCK_IDS, get_lock_status
+
+    names = {"desert": "mdbr", "sea": "ym"}
+    out = {}
+    for key, lock_id in LOCK_IDS.items():
+        try:
+            d = await get_lock_status(lock_id)
+            out[names.get(key, key)] = {
+                "battery": d.get("electricQuantity"),
+                "name": d.get("lockAlias") or d.get("lockName"),
+                "ok": True,
+            }
+        except Exception as e:
+            out[names.get(key, key)] = {"battery": None, "ok": False, "error": str(e)[:120]}
+    out["generated_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+    return out
