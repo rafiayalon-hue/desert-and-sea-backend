@@ -13,6 +13,8 @@ Public API expected by the rest of the app:
   list_passcodes(lock_id) -> list[dict]
   delete_passcode_by_id(lock_id, keyboard_pwd_id) -> bool
   get_lock_status(lock_id) -> dict
+  query_open_state(lock_id) -> dict        (NEW 4.10.26 — זמינות חיה)
+  list_lock_records(lock_id, start, end)   (NEW 4.10.26 — לוג פתיחות)
 
 תיקון (2.10.26) — אזור זמן:
   השרת ב-Railway רץ ב-UTC. datetime.combine(...).timestamp() על תאריך "נאיבי"
@@ -166,6 +168,59 @@ async def get_lock_status(lock_id: int) -> dict:
         r.raise_for_status()
         data = _check(r.json())
     return data
+
+
+async def query_open_state(lock_id: int) -> dict:
+    """NEW (4.10.26): בדיקה חיה דרך הגייטווי — האם המנעול עונה עכשיו.
+    lock/detail מחזיר נתון שמור בענן גם כשהמנעול מושבת (מצב שבת / בלי חשמל),
+    לכן לזמינות צריך שאילתה שמעירה את המנעול.
+    מחזיר {"reachable": bool, "state": 0 נעול / 1 פתוח / 2 לא ידוע, "error": ...}"""
+    token = await _get_token()
+    params = {
+        "clientId":    settings.ttlock_client_id,
+        "accessToken": token,
+        "lockId":      lock_id,
+        "date":        int(_time.time() * 1000),
+    }
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(f"{BASE_URL}/lock/queryOpenState", params=params, timeout=25)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as e:
+        return {"reachable": False, "state": None, "error": str(e)[:120]}
+    if isinstance(data, dict) and data.get("errcode", 0) not in (0, None):
+        return {"reachable": False, "state": None,
+                "error": f"{data.get('errcode')}: {data.get('errmsg')}"}
+    return {"reachable": True, "state": data.get("state"), "error": None}
+
+
+async def list_lock_records(lock_id: int, start_ms: int, end_ms: int) -> list[dict]:
+    """NEW (4.10.26): לוג פתיחות של המנעול (מה שהגייטווי העלה לענן).
+    כל רשומה: lockDate (ms), recordType, keyboardPwd (הקוד שהוקש), username, success."""
+    token = await _get_token()
+    out: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient() as client:
+        while True:
+            params = {
+                "clientId":    settings.ttlock_client_id,
+                "accessToken": token,
+                "lockId":      lock_id,
+                "startDate":   start_ms,
+                "endDate":     end_ms,
+                "pageNo":      page,
+                "pageSize":    100,
+                "date":        int(_time.time() * 1000),
+            }
+            r = await client.get(f"{BASE_URL}/lockRecord/list", params=params, timeout=20)
+            r.raise_for_status()
+            data = _check(r.json())
+            out.extend(data.get("list", []))
+            if page >= int(data.get("pages", 1) or 1) or page >= 10:
+                break
+            page += 1
+    return out
 
 
 # ---------------------------------------------------------------------------
