@@ -122,19 +122,55 @@ async def occupancy(
 @router.get("/locks")
 async def locks_status(x_ha_token: str | None = Header(default=None)):
     _check_token(x_ha_token)
-    from app.integrations.ttlock import LOCK_IDS, get_lock_status
+    from app.integrations.ttlock import LOCK_IDS, get_lock_status, query_open_state
 
     names = {"desert": "mdbr", "sea": "ym"}
     out = {}
     for key, lock_id in LOCK_IDS.items():
+        k = names.get(key, key)
         try:
             d = await get_lock_status(lock_id)
-            out[names.get(key, key)] = {
+            out[k] = {
                 "battery": d.get("electricQuantity"),
                 "name": d.get("lockAlias") or d.get("lockName"),
                 "ok": True,
             }
         except Exception as e:
-            out[names.get(key, key)] = {"battery": None, "ok": False, "error": str(e)[:120]}
+            out[k] = {"battery": None, "ok": False, "error": str(e)[:120]}
+        # NEW (4.10.26): זמינות חיה דרך הגייטווי (מצב שבת / סוללה מתה → false)
+        live = await query_open_state(lock_id)
+        out[k]["reachable"] = live["reachable"]
+        out[k]["reach_error"] = live["error"]
     out["generated_at"] = datetime.now(TZ).isoformat(timespec="seconds")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# NEW (4.10.26): לוג פתיחות — לבדיקה (קריאה בלבד)
+# GET /api/ha/lock-records?days=7
+# ---------------------------------------------------------------------------
+@router.get("/lock-records")
+async def lock_records(days: int = 7, x_ha_token: str | None = Header(default=None)):
+    _check_token(x_ha_token)
+    from app.integrations.ttlock import LOCK_IDS, list_lock_records
+
+    now_ms = int(datetime.now(TZ).timestamp() * 1000)
+    start_ms = now_ms - min(days, 60) * 86400 * 1000
+    names = {"desert": "mdbr", "sea": "ym"}
+    out = {}
+    for key, lock_id in LOCK_IDS.items():
+        try:
+            recs = await list_lock_records(lock_id, start_ms, now_ms)
+            out[names.get(key, key)] = [
+                {
+                    "time": datetime.fromtimestamp(r.get("lockDate", 0) / 1000, TZ).strftime("%d.%m %H:%M"),
+                    "type": r.get("recordType"),
+                    "code": r.get("keyboardPwd"),
+                    "user": r.get("username"),
+                    "success": r.get("success"),
+                }
+                for r in sorted(recs, key=lambda x: x.get("lockDate", 0), reverse=True)
+            ]
+        except Exception as e:
+            out[names.get(key, key)] = {"error": str(e)[:200]}
     return out
