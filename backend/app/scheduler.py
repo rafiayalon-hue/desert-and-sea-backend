@@ -430,6 +430,7 @@ def _build_body(message_type: str, booking: Booking) -> str:
             f"שלום {name}!\n"
             f"מזכירים — עוד יומיים ההגעה שלכם ל{room} 🎉\n"
             f"כניסה: {checkin_str}\n"
+            f"איזה חלב תרצו שנשאיר לכם? (רגיל / סויה / שיבולת שועל / שקדים / ללא לקטוז / בלי)\n"
             f"יש שאלות? כאן בשבילכם!\n"
             f"— Desert & Sea"
         ),
