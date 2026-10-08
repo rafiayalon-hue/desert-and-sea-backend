@@ -4,7 +4,7 @@ from sqlalchemy import select, and_, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.integrations.minihotel import minihotel_client
-from app.models import Booking
+from app.models import Booking, is_cancelled_status
 import calendar
 
 router = APIRouter()
@@ -398,6 +398,7 @@ class BookingUpdate(BaseModel):
     checkout_time: Optional[str] = None
     adults: Optional[int] = None       # NEW — עריכה ידנית של מספר מבוגרים
     children: Optional[int] = None     # NEW — עריכה ידנית של מספר ילדים
+    room_name: Optional[str] = None    # NEW (9.10.26) — שיוך/החלפת צימר: Sea / Sesert / Des_Sea
 
 
 @router.patch("/{booking_id}")
@@ -415,6 +416,8 @@ async def update_booking(
     had_phone = bool(booking.guest_phone)
     old_checkin_time = booking.checkin_time
     old_checkout_time = booking.checkout_time
+    # NEW (9.10.26): מצב לפני השינוי — לצורך העברת קוד בין מנעולים
+    old_room, old_ci, old_co = booking.room_name, booking.check_in, booking.check_out
 
     if data.notes is not None:
         booking.notes = data.notes
@@ -434,6 +437,10 @@ async def update_booking(
         booking.adults = data.adults
     if data.children is not None:
         booking.children = data.children
+    if data.room_name is not None:
+        booking.room_name = data.room_name.strip()
+
+    room_changed = data.room_name is not None and (booking.room_name or "") != (old_room or "")
 
     is_returning = False
 
@@ -481,6 +488,20 @@ async def update_booking(
     await db.commit()
     await db.refresh(booking)
 
+    # NEW (9.10.26): שינוי צימר (המקרה של איל יוסף).
+    #   יש קוד → הקוד עובר למנעול החדש והישן נמחק (+התראה ל-HA).
+    #   אין קוד ויש טלפון → נוצר קוד ונשלח (המקרה "לא היה צימר ולכן לא נוצר קוד").
+    lock_sync = None
+    if room_changed and not is_cancelled_status(booking.status):
+        if booking.entry_code:
+            from app.services.booking_guard import sync_code_after_change
+            lock_sync = await sync_code_after_change(booking, db, old_room, old_ci, old_co)
+        elif booking.guest_phone and had_phone:
+            from app.scheduler import create_and_send_entry_code
+            await create_and_send_entry_code(booking.id, db)
+            lock_sync = {"created": True}
+        await db.refresh(booking)
+
     # אם שינית שעת כניסה/יציאה ידנית ולהזמנה הזו כבר יש קוד כניסה בפועל —
     # מעדכנים גם את חלון התוקף האמיתי במנעול, לא רק את מה שמוצג בדשבורד.
     times_changed = (
@@ -502,4 +523,5 @@ async def update_booking(
         "automation_triggered": phone_just_added,
         "is_returning_guest": is_returning,
         "ttlock_window_updated": ttlock_window_updated,
+        "lock_sync": lock_sync,
     }

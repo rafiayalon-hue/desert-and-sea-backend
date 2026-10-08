@@ -114,6 +114,10 @@ async def assign_code(
     if not booking.check_in or not booking.check_out:
         raise HTTPException(status_code=400, detail="חסרות תאריכי כניסה/יציאה")
     code = await assign_passcode_to_booking(booking, db, passcode)
+    # NEW (9.10.26): קוד ריק = הצימר לא זוהה (room_name ריק/לא מוכר) — המקרה
+    # של איל יוסף. קודם זה "הצליח" בשקט בלי קוד; עכשיו הדשבורד מקבל שגיאה ברורה.
+    if not code:
+        raise HTTPException(status_code=400, detail="לא ניתן לזהות צימר להזמנה — יש לבחור צימר")
     # שולח את הודעת קוד-הכניסה עכשיו (אידמפוטנטי — אם כבר נשלחה לא ישלח
     # שוב), ומבטל את ה-fallback האוטומטי כדי שלא ירוץ שוב על הזמנה הזו.
     if booking.guest_phone:
