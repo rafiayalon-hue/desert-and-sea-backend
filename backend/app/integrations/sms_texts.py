@@ -21,6 +21,7 @@ TEXTS = {
             "שלום {name}, עוד יומיים נפגשים!\n"
             "כניסה {checkin} מ-14:00.\n"
             "הוראות הגעה וקוד כניסה יישלחו אליכם בבוקר יום ההגעה.\n"
+            "איזה חלב תרצו שנשאיר לכם? (רגיל / סויה / שיבולת שועל / שקדים / ללא לקטוז / בלי)\n"
             "— מדבר וים"
         ),
         "entry_code": (
@@ -47,6 +48,7 @@ TEXTS = {
             "Hi {name}, see you in two days!\n"
             "Check-in {checkin} from 14:00.\n"
             "Arrival instructions and your door code will be sent on the morning of arrival.\n"
+            "Which milk would you like us to leave for you? (regular / soy / oat / almond / lactose-free / none)\n"
             "— Desert and Sea"
         ),
         "entry_code": (
