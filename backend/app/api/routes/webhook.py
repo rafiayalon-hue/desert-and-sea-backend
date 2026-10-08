@@ -17,6 +17,12 @@ Supported notificationType values:
 Authentication: HTTP Basic Auth (required by MiniHotel's webhook spec).
 Credentials are configured via settings.minihotel_webhook_user /
 settings.minihotel_webhook_password and given to MiniHotel out-of-band.
+
+NEW (9.10.26) — app/services/booking_guard.py:
+  * הזמנה חדשה מאותו אורח+צימר+תאריכים חופפים → הישנה מבוטלת אוטומטית
+    (מקרה ליאת לסקה: שינוי תאריכים ב-Airbnb בלי ביטול של המקורית).
+  * עדכון הזמנה ששינה צימר → הקוד עובר למנעול החדש והישן נמחק
+    (מקרה איל יוסף). שינוי תאריכים בלבד → חלון הקוד במנעול מתעדכן.
 """
 import logging
 import secrets
@@ -33,6 +39,7 @@ from app.config import settings
 from app.database import get_db
 from app.models import Booking
 from app.scheduler import trigger_confirmation, schedule_booking_messages, cancel_scheduled_jobs
+from app.services.booking_guard import supersede_duplicates, sync_code_after_change
 
 router = APIRouter()
 security = HTTPBasic()
@@ -168,6 +175,9 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
     booking = result.scalar_one_or_none()
     is_brand_new = booking is None
 
+    # NEW (9.10.26): מצב לפני העדכון — כדי לזהות שינוי צימר/תאריכים
+    old_room = old_ci = old_co = None
+
     if is_brand_new:
         booking = Booking(
             minihotel_id=res_number,
@@ -188,6 +198,7 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         db.add(booking)
         await db.flush()
     else:
+        old_room, old_ci, old_co = booking.room_name, booking.check_in, booking.check_out
         if guest_name:
             booking.guest_name = guest_name
         if room_name:
@@ -221,6 +232,18 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         if booking.entry_code:
             from app.integrations.ttlock import remove_passcode_after_checkout
             await remove_passcode_after_checkout(booking, db)
+
+    # NEW (9.10.26): (א) הזמנה חדשה שמחליפה הזמנה קודמת של אותו אורח;
+    # (ג) עדכון ששינה צימר/תאריכים → עדכון המנעול. אף אחד מהם לא זורק.
+    superseded = []
+    lock_sync = None
+    if mh_status != "CL":
+        try:
+            superseded = await supersede_duplicates(booking, db)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("supersede_duplicates failed for %s: %s", booking.id, exc)
+        if not is_brand_new:
+            lock_sync = await sync_code_after_change(booking, db, old_room, old_ci, old_co)
 
     # New confirmed booking with a phone number → send confirmation now,
     # create the entry code, schedule the rest of the automated messages.
@@ -256,6 +279,8 @@ async def _handle_reservation_event(body: MiniHotelWebhook, db: AsyncSession):
         "children": booking.children,
         "messages_scheduled": should_notify and notify_error is None,
         "notify_error": notify_error,
+        "superseded": superseded,   # NEW (9.10.26)
+        "lock_sync": lock_sync,     # NEW (9.10.26)
         # visible for calibrating _normalise_room against real MiniHotel data
         "raw_room": {"roomNumber": first_room.get("roomNumber"), "roomType": first_room.get("roomType")},
         # NEW: echo the raw header so we can confirm the exact guest-count
