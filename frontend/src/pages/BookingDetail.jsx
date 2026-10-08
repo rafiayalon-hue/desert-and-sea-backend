@@ -21,6 +21,23 @@ const MESSAGES = [
   { type: "review_request",       label: "5. ביקורת",         templateId: 5 },
 ];
 
+// NEW (9.10.26): שיוך צימר — הערכים כפי שמגיעים מ-MiniHotel (כולל שגיאת הכתיב Sesert)
+const ROOM_OPTIONS = [
+  { value: "Sea",     label: "🌊 ים" },
+  { value: "Sesert",  label: "🏜️ מדבר" },
+  { value: "Des_Sea", label: "🏜️🌊 שני הצימרים" },
+];
+const IMPORT_STATUSES = ["channel manager", "homepage", "הקצאה"];
+const VERIFIED_MARK = "[נבדק ב-MiniHotel]";
+
+function currentRoomValue(booking) {
+  const r = booking.rooms || [];
+  if (r.includes("desert") && r.includes("sea")) return "Des_Sea";
+  if (r.includes("desert")) return "Sesert";
+  if (r.includes("sea")) return "Sea";
+  return "";
+}
+
 const CANCELLATION_TAGS = [
   { value: "internal_block", label: "🔒 חסימה פנימית" },
   { value: "guest_cancel",   label: "❌ ביטול אורח" },
@@ -227,6 +244,10 @@ export default function BookingDetail({ bookingId, navigate }) {
   // מחיקת הזמנה
   const [deleting, setDeleting] = useState(false);
 
+  // NEW (9.10.26): שינוי צימר
+  const [roomInput,  setRoomInput]  = useState(null);
+  const [savingRoom, setSavingRoom] = useState(false);
+
   if (loading) return <div style={{ padding: 40, textAlign: "center", color: "var(--text-muted)" }}>טוען...</div>;
   if (!booking) return (
     <div style={{ padding: 40, textAlign: "center" }}>
@@ -248,6 +269,37 @@ export default function BookingDetail({ bookingId, navigate }) {
   const ttlockCode    = showCodeForm ? null : (localTtlockCode !== null ? localTtlockCode : (booking.entry_code || null));
 
   const isCancelled = booking.status === "cancelled";
+
+  // NEW (9.10.26): בעיות שמונעות קוד / הודעות
+  const roomValue   = currentRoomValue(booking);
+  const isImported  = IMPORT_STATUSES.includes((booking.status || "").trim().toLowerCase());
+  const issues = isCancelled ? [] : [
+    !roomValue && "אין צימר משויך — לא ניתן ליצור קוד כניסה",
+    !phone && "אין טלפון — לא יישלחו הודעות וקוד",
+    isImported && !notes.includes(VERIFIED_MARK) && "נכנסה מייבוא — לוודא ב-MiniHotel שלא בוטלה או הוחלפה",
+  ].filter(Boolean);
+  const milkMatch = notes.match(/^חלב:\s*(.+)$/m);
+  const milk = milkMatch ? milkMatch[1].trim() : null;
+
+  const saveRoom = async () => {
+    const val = roomInput ?? roomValue;
+    if (!val || val === roomValue) return;
+    if (!window.confirm("לשנות צימר? אם יש קוד כניסה הוא יועבר למנעול החדש והישן יימחק.")) return;
+    setSavingRoom(true);
+    try {
+      const ok = await patchBooking(booking.id, { room_name: val });
+      if (ok) window.location.reload();
+      else alert("שמירה נכשלה");
+    } catch { alert("שגיאת רשת"); }
+    finally { setSavingRoom(false); }
+  };
+
+  const markVerified = async () => {
+    const newNotes = notes ? `${notes}\n${VERIFIED_MARK}` : VERIFIED_MARK;
+    const ok = await patchBooking(booking.id, { notes: newNotes });
+    if (ok) setInternalNotes(newNotes);
+    else alert("שמירה נכשלה");
+  };
   const isAirbnb    = (booking.source || "").toLowerCase() === "airbnb";
   const lang        = language || "he";
 
@@ -409,6 +461,18 @@ export default function BookingDetail({ bookingId, navigate }) {
         </div>
       </div>
 
+      {issues.length > 0 && (
+        <div style={{ background: "#fdecea", border: "1px solid #e74c3c", borderRadius: 10, padding: "10px 14px", marginBottom: 14, fontSize: ".88rem" }}>
+          <div style={{ fontWeight: 700, color: "#c0392b", marginBottom: 4 }}>⚠ ההזמנה דורשת טיפול</div>
+          {issues.map(i => <div key={i}>• {i}</div>)}
+          {isImported && !notes.includes(VERIFIED_MARK) && (
+            <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={markVerified}>
+              ✔ בדקתי ב-MiniHotel — ההזמנה תקינה
+            </button>
+          )}
+        </div>
+      )}
+
       {previewMsg && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
           <div style={{ background: "white", borderRadius: 16, padding: 24, maxWidth: 480, width: "90%", maxHeight: "80vh", overflow: "auto" }}>
@@ -506,7 +570,22 @@ export default function BookingDetail({ bookingId, navigate }) {
                 ? Math.round((new Date(booking.checkout) - new Date(booking.checkin)) / (1000*60*60*24))
                 : "—"}
             </Row>
-            <Row label="חדר">{booking.room_display}</Row>
+            <div className="detail-row">
+              <span className="detail-label">צימר</span>
+              <span className="detail-value" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <select className="input" style={{ padding: "4px 8px", fontSize: ".85rem", width: "auto" }}
+                  value={roomInput ?? roomValue} onChange={e => setRoomInput(e.target.value)} disabled={isCancelled}>
+                  {!roomValue && <option value="">— לא משויך —</option>}
+                  {ROOM_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                {roomInput && roomInput !== roomValue && (
+                  <button className="btn btn-primary btn-sm" onClick={saveRoom} disabled={savingRoom}>
+                    {savingRoom ? "..." : "שמור"}
+                  </button>
+                )}
+              </span>
+            </div>
+            <Row label="חלב">{milk}</Row>
             <Row label="מקור">{booking.source_label}</Row>
             <Row label="מחיר">₪{booking.total_price?.toLocaleString()}</Row>
           </Section>
