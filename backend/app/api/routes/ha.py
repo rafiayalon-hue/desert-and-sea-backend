@@ -174,3 +174,100 @@ async def lock_records(days: int = 7, x_ha_token: str | None = Header(default=No
         except Exception as e:
             out[names.get(key, key)] = {"error": str(e)[:200]}
     return out
+
+
+# ---------------------------------------------------------------------------
+# NEW (9.10.26) — רשימת כניסות (09:00) ובדיקת תקינות הזמנות (18:00)
+# ---------------------------------------------------------------------------
+_CABIN_HE = {"ym": "ים", "mdbr": "מדבר"}
+
+
+def _cabin_label(room_name: str | None) -> str:
+    cabins = _cabins_for(room_name)
+    if len(cabins) == 2:
+        return "שני הצימרים"
+    return _CABIN_HE.get(cabins[0], "?") if cabins else "⚠ לא משויך"
+
+
+@router.get("/arrivals")
+async def arrivals(
+    day: str = "tomorrow",
+    x_ha_token: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """כניסות ליום מסוים: day = today / tomorrow / YYYY-MM-DD.
+    מחזיר גם message מוכן לשליחה כהתראה."""
+    _check_token(x_ha_token)
+    from datetime import date as _date, timedelta
+    from app.services.booking_guard import booking_issues, get_milk
+
+    today = datetime.now(TZ).date()
+    if day == "today":
+        target = today
+    elif day == "tomorrow":
+        target = today + timedelta(days=1)
+    else:
+        target = _date.fromisoformat(day)
+
+    rows = (await db.execute(select(Booking).where(Booking.check_in == target))).scalars().all()
+    items = []
+    for b in sorted(rows, key=lambda x: x.room_name or ""):
+        if is_cancelled_status(b.status):
+            continue
+        items.append({
+            "id": b.id,
+            "name": b.guest_name,
+            "cabin": _cabin_label(b.room_name),
+            "nights": (b.check_out - b.check_in).days if b.check_out else None,
+            "adults": b.adults,
+            "children": b.children,
+            "code": b.entry_code,
+            "milk": get_milk(b),
+            "issues": booking_issues(b),
+        })
+
+    if not items:
+        msg = f"אין כניסות ב-{target.strftime('%d/%m')}."
+    else:
+        lines = []
+        for i in items:
+            ppl = f"{i['adults'] or '?'}+{i['children']}" if i["children"] else f"{i['adults'] or '?'}"
+            line = f"• {i['cabin']}: {i['name']} ({ppl}, {i['nights']} לילות) — חלב: {i['milk'] or 'לא ידוע'}"
+            if i["issues"]:
+                line += f"\n   ⚠ {', '.join(i['issues'])}"
+            lines.append(line)
+        msg = f"כניסות {target.strftime('%d/%m')}:\n" + "\n".join(lines)
+
+    return {"date": target.isoformat(), "count": len(items), "arrivals": items, "message": msg}
+
+
+@router.get("/booking-issues")
+async def booking_issues_report(
+    days: int = 14,
+    x_ha_token: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """הזמנות עם בעיה שנכנסות ב-`days` הימים הקרובים (כולל היום)."""
+    _check_token(x_ha_token)
+    from datetime import timedelta
+    from app.services.booking_guard import booking_issues
+
+    today = datetime.now(TZ).date()
+    rows = (await db.execute(
+        select(Booking).where(Booking.check_in >= today, Booking.check_in <= today + timedelta(days=days))
+    )).scalars().all()
+
+    items = []
+    for b in sorted(rows, key=lambda x: x.check_in):
+        issues = booking_issues(b)
+        if issues:
+            items.append({
+                "id": b.id, "name": b.guest_name, "check_in": b.check_in.isoformat(),
+                "cabin": _cabin_label(b.room_name), "issues": issues,
+            })
+
+    msg = "\n".join(
+        f"• {i['check_in'][8:10]}/{i['check_in'][5:7]} {i['name']} ({i['cabin']}): {', '.join(i['issues'])}"
+        for i in items
+    )
+    return {"count": len(items), "items": items, "message": msg}

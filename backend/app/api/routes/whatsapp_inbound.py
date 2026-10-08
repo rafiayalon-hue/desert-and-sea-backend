@@ -7,8 +7,13 @@ Docs: https://www.twilio.com/docs/messaging/guides/webhook-request
 
 זה ה-URL שצריך להזין ב-Twilio Console → WhatsApp Senders → Edit Sender →
 "Webhook URL for incoming messages".
+
+NEW (9.10.26): קליטת סוג חלב — תשובה לתזכורת של יומיים לפני ("איזה חלב
+תרצו?") נשמרת כשורה "חלב: X" בהערות של ההזמנה הקרובה של אותו טלפון
+(כניסה בעוד 0–4 ימים). רשימת הכניסות של 09:00 ב-HA מציגה אותה.
 """
 import logging
+from datetime import date, timedelta
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Response
@@ -19,8 +24,9 @@ from app.config import settings
 from app.database import get_db
 from app.integrations.sms import SmsError, send_sms, sms_enabled
 from app.integrations.whatsapp import _to_e164
-from app.models import Booking, MessageLog
+from app.models import Booking, MessageLog, is_cancelled_status
 from app.models.business_settings import BusinessSettings
+from app.services.booking_guard import detect_milk, set_milk
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -83,6 +89,30 @@ async def _notify_owners_of_inbound(guest_name: str | None, phone: str, body: st
             await _send_sms_notification(_to_e164(owner_phone), sms_body)
 
 
+async def _capture_milk(phone: str, body: str, bookings: list, db: AsyncSession) -> None:
+    """best-effort — לא מפיל את ה-webhook."""
+    try:
+        milk = detect_milk(body)
+        if not milk:
+            return
+        today = date.today()
+        upcoming = [
+            b for b in bookings
+            if _normalize_phone(b.guest_phone or "") == phone
+            and b.check_in and today <= b.check_in <= today + timedelta(days=4)
+            and not is_cancelled_status(b.status)
+        ]
+        if not upcoming:
+            return
+        b = min(upcoming, key=lambda x: x.check_in)
+        set_milk(b, milk)
+        db.add(b)
+        await db.commit()
+        logger.info(f"Booking {b.id}: milk = {milk}")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"milk capture failed: {e}")
+
+
 @router.post("/whatsapp-inbound")
 async def whatsapp_inbound(
     From: str = Form(...),
@@ -121,6 +151,9 @@ async def whatsapp_inbound(
     await db.commit()
 
     logger.info(f"WhatsApp inbound from {raw_phone}: matched_booking={matched.id if matched else None}")
+
+    # NEW (9.10.26): סוג חלב מתשובת האורח
+    await _capture_milk(normalized, Body, all_bookings, db)
 
     # NEW (17.7.26): התראת SMS לרפי ואבישג — כדי שידעו גם כשלא ליד המחשב.
     await _notify_owners_of_inbound(
