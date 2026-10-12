@@ -180,6 +180,12 @@ async def lock_records(days: int = 7, x_ha_token: str | None = Header(default=No
 # NEW (9.10.26) — רשימת כניסות (09:00) ובדיקת תקינות הזמנות (18:00)
 # ---------------------------------------------------------------------------
 _CABIN_HE = {"ym": "ים", "mdbr": "מדבר"}
+_DAYS_HE = ["ב'", "ג'", "ד'", "ה'", "ו'", "ש'", "א'"]  # weekday(): שני=0
+
+
+def _day(d) -> str:
+    """'ה' 15.10'"""
+    return f"{_DAYS_HE[d.weekday()]} {d.strftime('%d.%m')}"
 
 
 def _cabin_label(room_name: str | None) -> str:
@@ -227,7 +233,7 @@ async def arrivals(
         })
 
     if not items:
-        msg = f"אין כניסות ב-{target.strftime('%d/%m')}."
+        msg = f"אין כניסות ב-{_day(target)}."
     else:
         lines = []
         for i in items:
@@ -236,7 +242,7 @@ async def arrivals(
             if i["issues"]:
                 line += f"\n   ⚠ {', '.join(i['issues'])}"
             lines.append(line)
-        msg = f"כניסות {target.strftime('%d/%m')}:\n" + "\n".join(lines)
+        msg = f"כניסות {_day(target)}:\n" + "\n".join(lines)
 
     return {"date": target.isoformat(), "count": len(items), "arrivals": items, "message": msg}
 
@@ -271,3 +277,54 @@ async def booking_issues_report(
         for i in items
     )
     return {"count": len(items), "items": items, "message": msg}
+
+
+@router.get("/week")
+async def week_plan(
+    days: int = 7,
+    x_ha_token: str | None = Header(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """תוכנית כניסות/יציאות ל-`days` הימים הקרובים, לפי צימר, כולל חלונות ניקיון.
+    הזמנה של שני הצימרים (Des_Sea) מופיעה בשניהם."""
+    _check_token(x_ha_token)
+    from datetime import timedelta
+    from app.services.booking_guard import get_milk
+
+    today = datetime.now(TZ).date()
+    end = today + timedelta(days=days)
+    rows = (await db.execute(
+        select(Booking).where(Booking.check_in <= end, Booking.check_out >= today)
+    )).scalars().all()
+    rows = [b for b in rows if not is_cancelled_status(b.status)]
+
+    blocks, total_in = [], 0
+    for cabin, label in (("mdbr", "🏜️ מדבר"), ("ym", "🌊 ים")):
+        bs = sorted((b for b in rows if cabin in _cabins_for(b.room_name)), key=lambda b: b.check_in)
+        lines = []
+        for i, b in enumerate(bs):
+            nights = (b.check_out - b.check_in).days
+            ppl = f"{b.adults or '?'}+{b.children}" if b.children else f"{b.adults or '?'}"
+            first = (b.guest_name or "").split()[0] if b.guest_name else "?"
+            if b.check_in >= today:
+                total_in += 1
+                milk = get_milk(b)
+                lines.append(f"• כניסה {_day(b.check_in)} → {_day(b.check_out)} · {first} ({ppl}, {nights} ל')"
+                             + (f" · חלב: {milk}" if milk else ""))
+            else:
+                lines.append(f"• בצימר עכשיו: {first} — יציאה {_day(b.check_out)}")
+            if b.check_out > end:
+                continue
+            nxt = bs[i + 1] if i + 1 < len(bs) else None
+            if nxt is None:
+                lines.append(f"  🧹 ניקיון מ-{_day(b.check_out)} (אין כניסה הבאה בטווח)")
+            elif nxt.check_in == b.check_out:
+                lines.append(f"  ⚠️ החלפה באותו יום {_day(b.check_out)} — ניקיון באותו יום, עד 14:00")
+            else:
+                gap = (nxt.check_in - b.check_out).days
+                lines.append(f"  🧹 ניקיון: {_day(b.check_out)} – {_day(nxt.check_in)} ({gap} ימים)")
+        blocks.append(label + ":\n" + ("\n".join(lines) if lines else "• פנוי כל השבוע"))
+
+    title = f"תוכנית {_day(today)} – {_day(end)}"
+    return {"from": today.isoformat(), "to": end.isoformat(), "arrivals": total_in,
+            "title": title, "message": "\n\n".join(blocks)}
