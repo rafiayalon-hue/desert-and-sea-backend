@@ -157,6 +157,11 @@ async def schedule_booking_messages(booking: Booking, db: AsyncSession):
     checkout_dt = _checkout_dt(booking) - timedelta(hours=2)
     _add_job(f"checkout_{bid}", checkout_dt, bid, "checkout", phone)
 
+    # 4. NEW (24.10.26): מחיקת קוד TTLock — בשעת היציאה עצמה, לא שעתיים לפניה.
+    #    קודם המחיקה רצה יחד עם תזכורת היציאה (checkout_dt - 2h), ואורחים
+    #    שיצאו לטיול/ארוחת בוקר ביום העזיבה נשארו נעולים בחוץ ("קוד גישה שנמחק").
+    _add_job(f"cleanup_{bid}", _checkout_dt(booking), bid, "checkout_cleanup", phone)
+
 
 def cancel_scheduled_jobs(booking_id: int):
     """
@@ -165,7 +170,7 @@ def cancel_scheduled_jobs(booking_id: int):
     בדיפלוי הקודם). קוד כניסה שכבר נוצר בפועל לא מטופל כאן — ראו
     webhook.py, שקורא בנפרד ל-remove_passcode_after_checkout במקרה ביטול.
     """
-    for prefix in ("pre_arrival", "checkout"):
+    for prefix in ("pre_arrival", "checkout", "cleanup"):
         job_id = f"{prefix}_{booking_id}"
         try:
             scheduler.remove_job(job_id)
@@ -253,8 +258,16 @@ async def _send_scheduled(booking_id: int, message_type: str, phone: str,
             logger.info(f"Booking {booking_id}: cancelled, skipping {message_type}")
             return
 
-        # לאחר שליחת הודעת יציאה — מחק קוד TTLock
-        if message_type == "checkout":
+        # NEW (24.10.26): job ייעודי למחיקת קוד — רץ בשעת היציאה, בלי הודעה.
+        if message_type == "checkout_cleanup":
+            if _now() >= _checkout_dt(booking):
+                await _delete_ttlock_after_checkout(booking_id, db)
+            return
+
+        # תזכורת היציאה יוצאת שעתיים לפני שעת היציאה — הקוד חייב להישאר פעיל
+        # עד שעת היציאה עצמה (תיקון 24.10.26). אם ה-reconciliation רץ אחרי
+        # שעת היציאה (job שאבד בדיפלוי) — עכשיו מוחקים.
+        if message_type == "checkout" and _now() >= _checkout_dt(booking):
             await _delete_ttlock_after_checkout(booking_id, db)
         if send_message:
             await _send_if_not_sent(booking_id, message_type, phone, booking, db)
