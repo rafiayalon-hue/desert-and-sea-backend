@@ -2,6 +2,7 @@ export default function Sidebar({ currentPage, navigate, unreadCount = 0 }) {
   const items = [
     { id: "dashboard",     label: "לוח בקרה", icon: "🏠" },
     { id: "bookings",      label: "הזמנות",   icon: "📋" },
+    { id: "ops",           label: "תפעול",    icon: "🧭" }, // NEW (25.10.26)
     { id: "guests",        label: "אורחים",   icon: "👥" },
     { id: "conversations", label: "שיחות",    icon: "💬", badge: unreadCount },
     { id: "campaigns",     label: "קמפיינים", icon: "📣" }, // NEW (17.7.26)
