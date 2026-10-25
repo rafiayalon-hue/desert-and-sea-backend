@@ -14,6 +14,8 @@ from app.api.routes import campaigns         # NEW — רשימת פנייה ל�
 from app.api.routes import public_checkin   # NEW — עמוד קוד כניסה באתר הציבורי
 from app.api.routes import ha                # NEW — ממשק ל-Home Assistant
 from app.api.routes import fallback          # NEW (30.9.26) — גיבוי SMS / wa.me / השלמת הודעות
+from app.api.routes import cleaning          # NEW (4.10.26) — יומן ניקיונות מלוג המנעולים
+from app.api.routes import ops               # NEW (25.10.26) — לוח תפעול: הכנת צימר + תשלום/קבלה
 from app.database import engine, Base
 from app.scheduler import scheduler, run_reconciliation_now         # NEW
 
@@ -175,6 +177,8 @@ app.include_router(guests_merge.router, prefix="/api/guests", tags=["guests"])
 app.include_router(public_checkin.router)   # NEW — /public/entry-code/{token}
 app.include_router(ha.router)               # NEW — /api/ha/occupancy (Home Assistant)
 app.include_router(fallback.router)         # NEW (30.9.26) — /api/fallback/*
+app.include_router(cleaning.router)         # NEW (4.10.26) — /api/cleaning
+app.include_router(ops.router)              # NEW (25.10.26) — /api/ops
 
 
 @app.get("/api/health")
