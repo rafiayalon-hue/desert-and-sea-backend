@@ -11,6 +11,7 @@ import Conversations from "./pages/Conversations"; // NEW (17.7.26)
 import LockManagement from "./pages/LockManagement"; // NEW (28.7.26)
 import Campaigns from "./pages/Campaigns";         // NEW (17.7.26)
 import Cleaning from "./pages/Cleaning";           // NEW (4.10.26) — יומן ניקיונות
+import Ops from "./pages/Ops";                     // NEW (25.10.26) — תפעול
 
 const API_BASE = import.meta.env.VITE_API_URL
   ? `${import.meta.env.VITE_API_URL}/api`
@@ -38,6 +39,7 @@ function MobileHeader({ currentPage }) {
     conversations: "שיחות", // NEW (17.7.26)
     locks: "ניהול מנעולים", // NEW (28.7.26)
     cleaning: "ניקיונות",   // NEW (4.10.26)
+    ops: "תפעול",           // NEW (25.10.26)
     campaigns: "קמפיינים",  // NEW (17.7.26)
     reports:   "דוחות",
     settings:  "הגדרות",
@@ -64,6 +66,7 @@ function BottomNav({ currentPage, navigate, unreadCount }) {
   const items = [
     { id: "dashboard", label: "בקרה",   icon: "🏠" },
     { id: "bookings",  label: "הזמנות", icon: "📋" },
+    { id: "ops",       label: "תפעול",  icon: "🧭" }, // NEW (25.10.26)
     { id: "guests",    label: "אורחים",  icon: "👥" },
     { id: "conversations", label: "שיחות", icon: "💬", badge: unreadCount },
     { id: "reports",   label: "דוחות",  icon: "📊" },
@@ -171,6 +174,7 @@ export default function App() {
       case "conversations": return <Conversations navigate={navigate} onOpenConversation={refresh} />;
       case "locks": return <LockManagement />; // NEW (28.7.26)
       case "cleaning": return <Cleaning navigate={navigate} />; // NEW (4.10.26)
+      case "ops": return <Ops />; // NEW (25.10.26)
       case "campaigns": return <Campaigns />; // NEW (17.7.26)
       case "marketing": return <Marketing navigate={navigate} />;
       case "reports":   return <Reports />;
