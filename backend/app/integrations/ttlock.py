@@ -20,12 +20,18 @@ Public API expected by the rest of the app:
   השרת ב-Railway רץ ב-UTC. datetime.combine(...).timestamp() על תאריך "נאיבי"
   פירש 14:00 כ-14:00 UTC → במנעול (שעון ישראל) הופיע 17:00. עכשיו כל חלון
   זמן נבנה עם Asia/Jerusalem — כולל מעבר אוטומטי לשעון חורף.
+NEW (20.11.26) — אורח חוזר = אותו קוד:
+  הזמנה של אורח חוזר (אותו טלפון, שהייה קודמת שהסתיימה) מקבלת כקוד כניסה את
+  4 הספרות האחרונות של הטלפון — בשני הצימרים. אורח חדש ממשיך לקבל קוד אקראי.
+  אם הקוד תפוס (הזמנה חופפת באותו מנעול / קוד זהה קיים במנעול / קוד בעלים או
+  מנקה) — נוצר קוד אקראי ורפי ואבישג מקבלים התראה.
 תיקון (2.10.26) — שעות מההזמנה:
   יצירת קוד התעלמה מ-checkin_time / checkout_time שבהזמנה (תמיד 14:00→12:00).
   עכשיו גם היצירה וגם העדכון משתמשים באותו חלון (_booking_window).
 """
 import hashlib
 import logging
+import os
 import random
 import time as _time
 from datetime import date, datetime, time
@@ -249,6 +255,117 @@ def _gen_code() -> str:
             return code
 
 
+def _reserved_codes() -> set[str]:
+    """קודים שאסור לתת לאורח: בעלים, מנקה, ו-0000."""
+    cleaner = (os.getenv("CLEANER_CODE") or "5555").strip().rstrip("#")
+    return {"4708", "0000", cleaner}
+
+
+def _pick_last4(phone_digits: str, reserved: set[str]) -> str | None:
+    """4 הספרות האחרונות של הטלפון; None אם הטלפון קצר מדי או שהקוד שמור."""
+    if len(phone_digits) < 7:
+        return None
+    code = phone_digits[-4:]
+    return None if code in reserved else code
+
+
+def _parse_fixed_codes(raw: str | None, norm, reserved: set[str]) -> dict[str, str]:
+    """
+    משתנה סביבה FIXED_GUEST_CODES — קוד קבוע לאורח מסוים, לפי טלפון:
+        0523274533=2454;0501112222=1357      (מפרידים: ; , רווח או שורה חדשה)
+    הטלפון מנורמל (054… / +972… זהים). קוד חייב להיות 4–8 ספרות ולא שמור.
+    ערך לא תקין מדולג (עם אזהרה בלוג).
+    """
+    out: dict[str, str] = {}
+    for part in (raw or "").replace("\n", ";").replace(",", ";").replace(" ", ";").split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            logger.warning(f"FIXED_GUEST_CODES: skipping '{part}' (missing '=')")
+            continue
+        ph, code = (x.strip() for x in part.split("=", 1))
+        code = code.rstrip("#")
+        ph = norm(ph)
+        if len(ph) < 7 or not code.isdigit() or not (4 <= len(code) <= 8) or code in reserved:
+            logger.warning(f"FIXED_GUEST_CODES: skipping invalid entry for '{ph or part}'")
+            continue
+        out[ph] = code
+    return out
+
+
+async def _returning_guest_code(booking, db: AsyncSession) -> str | None:
+    """
+    קוד קבוע-לפי-טלפון לאורח: (א) קוד שהוגדר ידנית ב-FIXED_GUEST_CODES, או
+    (ב) לאורח חוזר — 4 הספרות האחרונות של הטלפון. None = קוד אקראי.
+    לא זורק חריגות — כל כשל = None (הזמנה לא נתקעת בגלל זה).
+    """
+    try:
+        from sqlalchemy import select
+        from app.models import Booking, is_cancelled_status
+        from app.services.booking_guard import norm_phone, notify_owners
+
+        phone = norm_phone(getattr(booking, "guest_phone", None))
+        if not phone or not booking.check_in or not booking.check_out:
+            return None
+
+        rows = (await db.execute(select(Booking).where(Booking.id != booking.id))).scalars().all()
+        active = [o for o in rows
+                  if not is_cancelled_status(o.status) and o.check_in and o.check_out]
+
+        reserved = _reserved_codes()
+        fixed = _parse_fixed_codes(os.getenv("FIXED_GUEST_CODES"), norm_phone, reserved).get(phone)
+        if fixed:
+            code, why = fixed, "קוד קבוע שהוגדר לאורח"
+        else:
+            # אורח חוזר = שהייה קודמת של אותו טלפון שהסתיימה לפני ההגעה הזו
+            if not any(norm_phone(o.guest_phone) == phone and o.check_out <= booking.check_in
+                       for o in active):
+                return None
+            code, why = _pick_last4(phone, reserved), "4 הספרות האחרונות של הטלפון"
+            if not code:
+                return None
+
+        my_locks = set(_resolve_lock_ids(booking.room_name))
+        if not my_locks:
+            return None
+
+        taken = None
+        # (1) הזמנה אחרת חופפת, עם אותו קוד, על אותו מנעול
+        for o in active:
+            if (o.entry_code or "").rstrip("#") == code \
+                    and my_locks & set(_resolve_lock_ids(o.room_name)) \
+                    and o.check_in < booking.check_out and booking.check_in < o.check_out:
+                taken = f"הזמנה {o.id} ({o.guest_name})"
+                break
+        # (2) קוד זהה שקיים כבר בפועל במנעול (כולל קוד שלא נמחק עדיין)
+        if not taken:
+            for lock_id in my_locks:
+                try:
+                    existing = await list_passcodes(lock_id)
+                except Exception as e:  # noqa: BLE001 — אי אפשר לאמת; ממשיכים עם בדיקת ה-DB
+                    logger.warning(f"returning-code: list_passcodes({lock_id}) failed: {e}")
+                    continue
+                if any(str(p.get("keyboardPwd") or "").rstrip("#") == code for p in existing):
+                    taken = f"קוד קיים במנעול {lock_id}"
+                    break
+
+        if taken:
+            logger.warning(f"Booking {booking.id}: guest code {code} taken ({taken}) → random")
+            await notify_owners(
+                "קוד אורח חוזר תפוס",
+                f"{booking.guest_name}: {why} תפוס ({taken}). נוצר קוד אקראי — "
+                f"אם זה קוד ישן/ידני במנעול, למחוק אותו ב-TTLock ולהקצות מחדש להזמנה.",
+            )
+            return None
+
+        logger.info(f"Booking {booking.id}: guest code from: {why}")
+        return code
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"returning-guest code failed for booking {getattr(booking, 'id', '?')}: {e}")
+        return None
+
+
 def _israel_ms(d: date, t: time) -> int:
     """תאריך + שעה בשעון ישראל → epoch ms (נכון גם בשעון חורף/קיץ)."""
     return int(datetime.combine(d, t, tzinfo=TZ).timestamp() * 1000)
@@ -297,7 +414,7 @@ async def assign_passcode_to_booking(booking, db: AsyncSession,
         logger.error(f"Booking {booking.id}: cannot resolve lock for room '{booking.room_name}'")
         return ""
 
-    code = passcode or booking.entry_code or _gen_code()
+    code = passcode or booking.entry_code or await _returning_guest_code(booking, db) or _gen_code()
     start_ms, end_ms = _booking_window(booking)
 
     name = f"{booking.guest_name or 'Guest'} #{booking.id}"
